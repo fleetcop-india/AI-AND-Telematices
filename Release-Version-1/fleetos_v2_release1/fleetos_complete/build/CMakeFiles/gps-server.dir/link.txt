@@ -1,0 +1,1 @@
+/usr/bin/c++ -O2 -Wl,--dependency-file=CMakeFiles/gps-server.dir/link.d "CMakeFiles/gps-server.dir/agents/gps-server/main.cpp.o" -o /home/harish/Baseline-releases/Release-Version-1/fleetos_v2_release1/fleetos_complete/bin/gps-server  -lpthread

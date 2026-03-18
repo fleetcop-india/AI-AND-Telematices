@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fleet OS — Playback</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;font-family:'Segoe UI',system-ui,sans-serif;background:#0f172a;color:#e2e8f0;overflow:hidden}
+#shell{display:flex;height:100vh}
+#left{width:295px;flex-shrink:0;background:#1e293b;display:flex;flex-direction:column;border-right:1px solid rgba(255,255,255,.07);overflow-y:auto}
+#right{flex:1;display:flex;flex-direction:column;min-width:0;position:relative}
+#map-wrap{flex:1;position:relative;min-height:0}
+#map{width:100%;height:100%}
+
+/* Left panel */
+.sec-hdr{padding:10px 16px 4px;font-size:9.5px;font-weight:800;letter-spacing:1.4px;color:#334155;text-transform:uppercase}
+.pfield{padding:0 14px 10px}
+.plabel{font-size:10.5px;font-weight:700;color:#64748b;margin-bottom:4px;letter-spacing:.3px}
+.psel,.pinput{width:100%;background:#0f172a;border:1px solid rgba(255,255,255,.09);color:#e2e8f0;
+  border-radius:8px;padding:7px 10px;font-size:12.5px;outline:none;transition:border .15s}
+.psel:focus,.pinput:focus{border-color:#3b82f6}
+.prow2{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:0 14px 10px}
+/* Vehicle type cards */
+.vgrid{display:grid;grid-template-columns:1fr 1fr;gap:7px;padding:0 14px 14px}
+.vcard{background:#0f172a;border:1.5px solid rgba(255,255,255,.08);border-radius:10px;
+  padding:9px 6px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;transition:all .18s}
+.vcard:hover{border-color:#3b82f6;background:#1e3a5f}
+.vcard.active{border-color:#3b82f6;background:#1e3a5f;box-shadow:0 0 0 3px rgba(59,130,246,.18)}
+.vcard-lbl{font-size:10px;font-weight:700;color:#94a3b8;letter-spacing:.4px}
+.vcard.active .vcard-lbl{color:#60a5fa}
+/* Load button */
+.load-btn{margin:0 14px 14px;width:calc(100% - 28px);background:linear-gradient(135deg,#2563eb,#7c3aed);
+  color:#fff;border:none;border-radius:10px;padding:11px;font-size:13px;font-weight:700;
+  cursor:pointer;transition:all .18s;letter-spacing:.3px}
+.load-btn:hover{opacity:.9;transform:translateY(-1px)}
+.load-btn:disabled{opacity:.5;transform:none;cursor:not-allowed}
+/* Stats */
+.stat-row{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:0 14px 8px}
+.stat-item{background:#0f172a;border-radius:8px;padding:8px 10px}
+.stat-lbl{font-size:9.5px;color:#475569;font-weight:700;letter-spacing:.6px;text-transform:uppercase}
+.stat-val{font-size:16px;font-weight:800;color:#e2e8f0;margin-top:2px}
+/* Time buckets */
+.time-row{padding:0 14px 10px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px}
+.tbucket{background:#0f172a;border-radius:8px;padding:6px 8px;text-align:center}
+.tbucket-lbl{font-size:9px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;margin-bottom:2px}
+.tbucket-val{font-size:12.5px;font-weight:700}
+.tb-move .tbucket-lbl{color:#22c55e} .tb-idle .tbucket-lbl{color:#f59e0b} .tb-stop .tbucket-lbl{color:#94a3b8}
+/* Stop count summary */
+.stop-summary{margin:0 14px 10px;background:#0f172a;border-radius:8px;padding:8px 12px}
+.stop-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.stop-chip{background:#1e293b;border:1px solid rgba(255,255,255,.1);border-radius:99px;
+  padding:2px 8px;font-size:10.5px;font-weight:700;cursor:pointer;transition:all .15s}
+.stop-chip:hover{background:#3b82f6;border-color:#3b82f6;color:#fff}
+/* Relative stats HUD */
+.rel-hud{margin:0 14px 10px;background:#1e3a5f;border:1px solid rgba(59,130,246,.3);border-radius:8px;padding:8px 12px;display:none}
+.rel-row{display:flex;justify-content:space-between;font-size:11px;padding:2px 0}
+.rel-lbl{color:#64748b;font-weight:600} .rel-val{color:#93c5fd;font-weight:700;font-family:monospace}
+
+/* HUD overlay */
+#hud{position:absolute;top:12px;left:12px;background:rgba(15,23,42,.82);backdrop-filter:blur(8px);
+  border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:10px 14px;
+  font-size:12px;display:none;z-index:500;pointer-events:none;min-width:180px}
+#hud>div{padding:2px 0;color:#94a3b8} #hud .hv{color:#e2e8f0;font-weight:700}
+#pt-badge{position:absolute;top:12px;right:12px;background:rgba(15,23,42,.8);
+  border:1px solid rgba(255,255,255,.1);border-radius:20px;padding:4px 12px;
+  font-size:11px;font-weight:700;color:#60a5fa;z-index:500;display:none}
+
+/* Loading/empty */
+#empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:14px;color:#475569;text-align:center;pointer-events:none}
+#empty p{font-size:14px;line-height:1.6}
+#loading-overlay{position:absolute;inset:0;background:rgba(15,23,42,.75);
+  display:none;align-items:center;justify-content:center;z-index:999}
+#loading-overlay.show{display:flex}
+.spinner{width:36px;height:36px;border:3px solid rgba(255,255,255,.1);
+  border-top-color:#3b82f6;border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Controls bar */
+#ctrl{background:#0f172a;border-top:1px solid rgba(255,255,255,.07);padding:10px 14px;flex-shrink:0}
+.ctrl-row{display:flex;align-items:center;gap:8px;flex-wrap:nowrap}
+.cbtn{background:#1e293b;border:1px solid rgba(255,255,255,.1);color:#e2e8f0;
+  border-radius:7px;width:34px;height:34px;font-size:14px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;transition:all .15s;flex-shrink:0}
+.cbtn:hover{background:#2d4a6b;border-color:#3b82f6}
+.cbtn.playing{background:#1d4ed8;border-color:#3b82f6}
+.spd-row{display:flex;gap:3px;flex-shrink:0}
+.spdbtn{background:#1e293b;border:1px solid rgba(255,255,255,.1);color:#94a3b8;
+  border-radius:6px;padding:4px 7px;font-size:11px;font-weight:700;cursor:pointer;transition:all .15s}
+.spdbtn.on{background:#2563eb;border-color:#3b82f6;color:#fff}
+.spdbtn:hover{border-color:#3b82f6;color:#e2e8f0}
+/* Timeline */
+.tl-wrap{flex:1;padding:6px 4px;cursor:pointer;touch-action:none;min-width:60px}
+.tl-track{height:6px;background:rgba(255,255,255,.1);border-radius:3px;position:relative}
+.tl-fill{height:100%;background:linear-gradient(90deg,#2563eb,#7c3aed);border-radius:3px;width:0;transition:width .1s}
+.tl-thumb{position:absolute;top:50%;width:14px;height:14px;background:#fff;border-radius:50%;
+  transform:translate(-50%,-50%);left:0;box-shadow:0 0 0 3px rgba(59,130,246,.4);transition:left .1s}
+.ts-badge{background:#1e293b;border-radius:6px;padding:4px 8px;font-size:11px;font-weight:700;
+  color:#60a5fa;font-family:monospace;flex-shrink:0;white-space:nowrap}
+/* Toast */
+#toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%) translateY(20px);
+  background:#1e293b;border:1px solid rgba(255,255,255,.15);color:#e2e8f0;
+  border-radius:10px;padding:10px 20px;font-size:13px;font-weight:600;
+  opacity:0;transition:all .3s;pointer-events:none;z-index:9999;max-width:90vw;text-align:center}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+/* Trip popup dark */
+.leaflet-popup-content-wrapper{background:#1e293b!important;border:1px solid rgba(255,255,255,.1)!important;color:#e2e8f0!important;border-radius:10px!important}
+.leaflet-popup-tip{background:#1e293b!important}
+.leaflet-popup-content{margin:10px 14px!important;font-size:12.5px!important}
+</style>
+</head>
+<body>
+<div id="shell">
+  <div id="left">
+    <div style="padding:14px 16px 10px;display:flex;align-items:center;gap:10px;border-bottom:1px solid rgba(255,255,255,.07)">
+      <button onclick="window.location.href='/'" style="background:#1e293b;border:1px solid rgba(255,255,255,.1);
+        color:#94a3b8;border-radius:7px;padding:5px 10px;font-size:12px;cursor:pointer">← Back</button>
+      <div>
+        <div style="font-size:13px;font-weight:800;color:#e2e8f0">Route Playback</div>
+        <div style="font-size:10.5px;color:#475569" id="pb-header-sub">Select device &amp; date</div>
+      </div>
+    </div>
+
+    <div class="sec-hdr">Device</div>
+    <div class="pfield">
+      <div class="plabel">Device / IMEI</div>
+      <select class="psel" id="f-device" onchange="onDeviceChange(this.value)">
+        <option value="">— Loading devices… —</option>
+      </select>
+    </div>
+
+    <div class="sec-hdr">Date &amp; Time</div>
+    <div class="pfield">
+      <div class="plabel">Date</div>
+      <input class="pinput" type="date" id="f-date">
+    </div>
+    <div class="prow2">
+      <div><div class="plabel">From</div><input class="pinput" type="time" id="f-from" value="00:00"></div>
+      <div><div class="plabel">To</div><input class="pinput" type="time" id="f-to" value="23:59"></div>
+    </div>
+
+    <div class="sec-hdr">Vehicle Type</div>
+    <div class="vgrid">
+      <div class="vcard active" data-vtype="Car" onclick="setVType(this)">
+        <svg width="32" height="32" viewBox="0 0 46 46"><rect x="13" y="5" width="20" height="36" rx="7" fill="#2563eb"/><rect x="15" y="9" width="16" height="11" rx="3" fill="#93c5fd" opacity=".85"/><rect x="8" y="9" width="6" height="8" rx="2" fill="#bfdbfe" opacity=".5"/><rect x="32" y="9" width="6" height="8" rx="2" fill="#bfdbfe" opacity=".5"/><rect x="8" y="28" width="6" height="8" rx="2" fill="#1e3a8a"/><rect x="32" y="28" width="6" height="8" rx="2" fill="#1e3a8a"/></svg>
+        <div class="vcard-lbl">CAR</div>
+      </div>
+      <div class="vcard" data-vtype="Bike" onclick="setVType(this)">
+        <svg width="32" height="32" viewBox="0 0 46 46"><ellipse cx="23" cy="23" rx="5" ry="15" fill="#7c3aed"/><ellipse cx="23" cy="11" rx="4" ry="6" fill="#8b5cf6"/><ellipse cx="23" cy="35" rx="4" ry="6" fill="#8b5cf6"/><circle cx="23" cy="8" r="4" fill="#4c1d95" stroke="#a78bfa" stroke-width="1.5"/><circle cx="23" cy="38" r="4" fill="#4c1d95" stroke="#a78bfa" stroke-width="1.5"/></svg>
+        <div class="vcard-lbl">BIKE</div>
+      </div>
+      <div class="vcard" data-vtype="Bus" onclick="setVType(this)">
+        <svg width="32" height="32" viewBox="0 0 46 46"><rect x="8" y="5" width="30" height="36" rx="4" fill="#16a34a"/><rect x="10" y="7" width="26" height="8" rx="2" fill="#4ade80" opacity=".7"/><rect x="10" y="17" width="11" height="7" rx="1" fill="#86efac" opacity=".8"/><rect x="25" y="17" width="11" height="7" rx="1" fill="#86efac" opacity=".8"/></svg>
+        <div class="vcard-lbl">BUS</div>
+      </div>
+      <div class="vcard" data-vtype="Truck" onclick="setVType(this)">
+        <svg width="32" height="32" viewBox="0 0 46 46"><rect x="11" y="5" width="24" height="36" rx="3" fill="#b45309"/><rect x="13" y="7" width="20" height="11" rx="2" fill="#fbbf24" opacity=".8"/><rect x="7" y="33" width="6" height="7" rx="1" fill="#78350f"/><rect x="33" y="33" width="6" height="7" rx="1" fill="#78350f"/></svg>
+        <div class="vcard-lbl">TRUCK</div>
+      </div>
+      <div class="vcard" data-vtype="Auto" onclick="setVType(this)">
+        <svg width="32" height="32" viewBox="0 0 46 46"><path d="M6 30 Q8 8 23 8 Q38 8 40 30 L40 38 L6 38 Z" fill="#0d9488"/><rect x="10" y="14" width="26" height="14" rx="3" fill="rgba(255,255,255,.2)"/></svg>
+        <div class="vcard-lbl">AUTO</div>
+      </div>
+      <div class="vcard" data-vtype="MiniTruck" onclick="setVType(this)">
+        <svg width="32" height="32" viewBox="0 0 46 46"><rect x="10" y="8" width="26" height="30" rx="3" fill="#ea580c"/><rect x="12" y="10" width="22" height="10" rx="2" fill="#fed7aa" opacity=".8"/><rect x="6" y="32" width="7" height="6" rx="1" fill="#7c2d12"/><rect x="33" y="32" width="7" height="6" rx="1" fill="#7c2d12"/></svg>
+        <div class="vcard-lbl">MINI TRUCK</div>
+      </div>
+    </div>
+
+    <button class="load-btn" id="load-btn" onclick="loadTrack()">⬇ Load Track</button>
+
+    <div class="sec-hdr">Stats</div>
+    <div class="stat-row">
+      <div class="stat-item"><div class="stat-lbl">DISTANCE</div><div class="stat-val" id="s-dist">—</div></div>
+      <div class="stat-item"><div class="stat-lbl">MAX SPD</div><div class="stat-val" id="s-max">—</div></div>
+      <div class="stat-item"><div class="stat-lbl">AVG SPD</div><div class="stat-val" id="s-avg">—</div></div>
+      <div class="stat-item"><div class="stat-lbl">STOPS</div><div class="stat-val" id="s-stops">—</div></div>
+      <div class="stat-item"><div class="stat-lbl">DURATION</div><div class="stat-val" id="s-dur">—</div></div>
+      <div class="stat-item"><div class="stat-lbl">GPS PTS</div><div class="stat-val" id="s-pts">—</div></div>
+    </div>
+
+    <!-- Time buckets: move / idle / stop -->
+    <div class="sec-hdr">Time Breakdown</div>
+    <div class="time-row">
+      <div class="tbucket tb-move"><div class="tbucket-lbl">Moving</div><div class="tbucket-val" id="tb-move">—</div></div>
+      <div class="tbucket tb-idle"><div class="tbucket-lbl">Idle</div><div class="tbucket-val" id="tb-idle">—</div></div>
+      <div class="tbucket tb-stop"><div class="tbucket-lbl">Stopped</div><div class="tbucket-val" id="tb-stop">—</div></div>
+    </div>
+
+    <!-- Stop pins list -->
+    <div class="stop-summary" id="stop-summary" style="display:none">
+      <div style="font-size:10.5px;font-weight:700;color:#64748b;letter-spacing:.5px;text-transform:uppercase">Stop Locations</div>
+      <div class="stop-chips" id="stop-chips"></div>
+    </div>
+
+    <!-- Relative stats during playback -->
+    <div class="rel-hud" id="rel-hud">
+      <div style="font-size:9.5px;font-weight:800;color:#3b82f6;letter-spacing:.8px;text-transform:uppercase;margin-bottom:4px">Live Stats</div>
+      <div class="rel-row"><span class="rel-lbl">Elapsed</span><span class="rel-val" id="rel-elapsed">—</span></div>
+      <div class="rel-row"><span class="rel-lbl">From Start</span><span class="rel-val" id="rel-dist">—</span></div>
+      <div class="rel-row"><span class="rel-lbl">Speed</span><span class="rel-val" id="rel-spd">—</span></div>
+      <div class="rel-row"><span class="rel-lbl">To Next Stop</span><span class="rel-val" id="rel-next-stop">—</span></div>
+    </div>
+
+    <div style="padding:0 14px 14px">
+      <button onclick="exportCSV()" style="width:100%;background:#1e293b;border:1px solid rgba(255,255,255,.1);
+        color:#94a3b8;border-radius:8px;padding:8px;font-size:12px;cursor:pointer">⬇ Export CSV</button>
+    </div>
+  </div>
+
+  <div id="right">
+    <div id="map-wrap">
+      <div id="map"></div>
+      <div id="empty">
+        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+          <path d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 13l4.553 2.276A1 1 0 0021 21.382V10.618a1 1 0 00-.553-.894L15 7m0 13V7m0 0L9 4"/>
+        </svg>
+        <p>Pick a device &amp; date,<br>then tap <b>Load Track</b></p>
+      </div>
+      <div id="loading-overlay">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:14px">
+          <div class="spinner"></div>
+          <div style="font-size:13px;font-weight:600;color:#94a3b8">Loading GPS track…</div>
+        </div>
+      </div>
+      <!-- Live HUD -->
+      <div id="hud">
+        <div>🕐 <span class="hv" id="h-ts">—</span></div>
+        <div>📍 <span class="hv" id="h-coord">—</span></div>
+        <div>⚡ <span class="hv" id="h-spd">— km/h</span> &nbsp;🧭 <span class="hv" id="h-hdg">—°</span></div>
+        <div>🔑 <span class="hv" id="h-ign">—</span></div>
+      </div>
+      <div id="pt-badge"></div>
+    </div>
+    <!-- Controls bar -->
+    <div id="ctrl">
+      <div class="ctrl-row">
+        <button class="cbtn" onclick="goRestart()" title="Restart">⏮</button>
+        <button class="cbtn" onclick="step(-10)" title="−10 pts">⏪</button>
+        <button class="cbtn" id="playbtn" onclick="togglePlay()">▶</button>
+        <button class="cbtn" onclick="step(10)" title="+10 pts">⏩</button>
+        <button class="cbtn" onclick="goEnd()" title="Jump end">⏭</button>
+        <div class="spd-row">
+          <div class="spdbtn on" onclick="setSpd(1,this)">1×</div>
+          <div class="spdbtn" onclick="setSpd(2,this)">2×</div>
+          <div class="spdbtn" onclick="setSpd(5,this)">5×</div>
+          <div class="spdbtn" onclick="setSpd(10,this)">10×</div>
+          <div class="spdbtn" onclick="setSpd(30,this)">30×</div>
+        </div>
+        <div class="tl-wrap" id="tl-wrap">
+          <div class="tl-track" id="tl-track">
+            <div class="tl-fill" id="tl-fill"></div>
+            <div class="tl-thumb" id="tl-thumb"></div>
+          </div>
+        </div>
+        <div class="ts-badge" id="ts-badge">--:--:--</div>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+// CONFIG + AUTH
+// ═══════════════════════════════════════════════════════
+const API = window.location.origin + '/api';
+let JWT = localStorage.getItem('fleetos_jwt') || sessionStorage.getItem('fleetos_jwt') || '';
+
+async function apiFetch(path) {
+  if (!JWT) { showToast('Not logged in — open Fleet OS first'); throw new Error('No auth'); }
+  const r = await fetch(API + path, {headers:{'Authorization':'Bearer '+JWT}});
+  if (r.status === 401) { showToast('Session expired — log in again'); throw new Error('401'); }
+  if (!r.ok) { const t = await r.text(); throw new Error('API '+r.status+': '+t.slice(0,120)); }
+  return r.json();
+}
+
+// ═══════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════
+let map = null, polyline = null, startMk = null, endMk = null, marker = null;
+let stopMarkers = [], tripSegments = [];
+let track = [], stops = [], trips = [];
+let idx = 0, playing = false, speed = 1;
+let rafId = null, lastTs = 0, accum = 0, seeking = false;
+let vtype = 'Car';
+
+// ═══════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════
+window.addEventListener('DOMContentLoaded', async () => {
+  map = L.map('map', {zoomControl:true, attributionControl:false});
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(map);
+  L.control.attribution({prefix:'© OpenStreetMap'}).addTo(map);
+  map.setView([20.5937, 78.9629], 5);
+  document.getElementById('tl-wrap').addEventListener('mousedown', seekStart);
+  document.getElementById('tl-wrap').addEventListener('touchstart', seekStart, {passive:true});
+  document.getElementById('f-date').value = new Date().toISOString().slice(0,10);
+  await loadDevices();
+});
+
+// ═══════════════════════════════════════════════════════
+// DEVICES
+// ═══════════════════════════════════════════════════════
+async function loadDevices() {
+  try {
+    const devs = await apiFetch('/devices');
+    const sel = document.getElementById('f-device');
+    sel.innerHTML = '<option value="">— Select device —</option>' +
+      (devs||[]).map(d=>`<option value="${d.imei}" data-vtype="${d.vehicle_type||'Car'}">${d.name||d.imei} (${d.imei})</option>`).join('');
+  } catch(e) { showToast('Could not load devices: '+e.message); }
+}
+
+async function onDeviceChange(imei) {
+  if (!imei) return;
+  const opt = document.querySelector(`#f-device option[value="${imei}"]`);
+  if (opt) {
+    const dvt = opt.dataset.vtype || 'Car';
+    const match = ['Car','Bike','Bus','Truck','Auto','MiniTruck'].find(t => new RegExp(t,'i').test(dvt)) || 'Car';
+    setVTypeByName(match);
+  }
+  try {
+    const dates = await apiFetch('/playback-dates/'+imei);
+    if (Array.isArray(dates) && dates.length) document.getElementById('f-date').value = dates[0];
+  } catch {}
+}
+
+// ═══════════════════════════════════════════════════════
+// VEHICLE SVG (top-view, rotated by heading)
+// ═══════════════════════════════════════════════════════
+function vehicleSVG(type, hdg) {
+  const r = `rotate(${+(hdg||0).toFixed(1)},23,23)`;
+  if (/bike|motor/i.test(type)) return `<svg xmlns="http://www.w3.org/2000/svg" width="46" height="46" viewBox="0 0 46 46"><g transform="${r}"><ellipse cx="23" cy="23" rx="5" ry="15" fill="#7c3aed"/><ellipse cx="23" cy="11" rx="4" ry="6" fill="#8b5cf6"/><ellipse cx="23" cy="35" rx="4" ry="6" fill="#8b5cf6"/><circle cx="23" cy="8" r="4" fill="#4c1d95" stroke="#a78bfa" stroke-width="1.5"/><circle cx="23" cy="38" r="4" fill="#4c1d95" stroke="#a78bfa" stroke-width="1.5"/></g></svg>`;
+  if (/bus|coach/i.test(type)) return `<svg xmlns="http://www.w3.org/2000/svg" width="46" height="46" viewBox="0 0 46 46"><g transform="${r}"><rect x="8" y="5" width="30" height="36" rx="4" fill="#16a34a"/><rect x="10" y="7" width="26" height="8" rx="2" fill="#4ade80" opacity=".7"/><rect x="10" y="17" width="11" height="7" rx="1" fill="#86efac" opacity=".8"/><rect x="25" y="17" width="11" height="7" rx="1" fill="#86efac" opacity=".8"/></g></svg>`;
+  if (/truck/i.test(type)) return `<svg xmlns="http://www.w3.org/2000/svg" width="46" height="46" viewBox="0 0 46 46"><g transform="${r}"><rect x="11" y="5" width="24" height="36" rx="3" fill="#b45309"/><rect x="13" y="7" width="20" height="11" rx="2" fill="#fbbf24" opacity=".8"/><rect x="7" y="33" width="6" height="7" rx="1" fill="#78350f"/><rect x="33" y="33" width="6" height="7" rx="1" fill="#78350f"/></g></svg>`;
+  if (/auto|rick/i.test(type)) return `<svg xmlns="http://www.w3.org/2000/svg" width="46" height="46" viewBox="0 0 46 46"><g transform="${r}"><path d="M6 30 Q8 8 23 8 Q38 8 40 30 L40 38 L6 38 Z" fill="#0d9488"/><rect x="10" y="14" width="26" height="14" rx="3" fill="rgba(255,255,255,.2)"/></g></svg>`;
+  if (/mini|tempo/i.test(type)) return `<svg xmlns="http://www.w3.org/2000/svg" width="46" height="46" viewBox="0 0 46 46"><g transform="${r}"><rect x="10" y="8" width="26" height="30" rx="3" fill="#ea580c"/><rect x="12" y="10" width="22" height="10" rx="2" fill="#fed7aa" opacity=".8"/><rect x="6" y="32" width="7" height="6" rx="1" fill="#7c2d12"/><rect x="33" y="32" width="7" height="6" rx="1" fill="#7c2d12"/></g></svg>`;
+  // Car default
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="46" height="46" viewBox="0 0 46 46"><g transform="${r}"><rect x="13" y="5" width="20" height="36" rx="7" fill="#2563eb"/><rect x="15" y="9" width="16" height="11" rx="3" fill="#93c5fd" opacity=".85"/><rect x="15" y="25" width="16" height="9" rx="2" fill="#93c5fd" opacity=".5"/><rect x="13" y="21" width="20" height="5" rx="1" fill="#1d4ed8"/><rect x="8" y="9" width="6" height="8" rx="2" fill="#bfdbfe" opacity=".5"/><rect x="32" y="9" width="6" height="8" rx="2" fill="#bfdbfe" opacity=".5"/><rect x="8" y="28" width="6" height="8" rx="2" fill="#1e3a8a"/><rect x="32" y="28" width="6" height="8" rx="2" fill="#1e3a8a"/></g></svg>`;
+}
+
+function setVType(card) {
+  document.querySelectorAll('.vcard').forEach(c=>c.classList.remove('active'));
+  card.classList.add('active'); vtype = card.dataset.vtype; refreshMarker();
+}
+function setVTypeByName(name) {
+  const c = document.querySelector(`.vcard[data-vtype="${name}"]`); if(c) setVType(c);
+}
+function refreshMarker() {
+  if (marker && track.length) {
+    const p = track[idx];
+    marker.setIcon(L.divIcon({className:'',html:vehicleSVG(vtype,p._hdg),iconSize:[46,46],iconAnchor:[23,23]}));
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// STOP DETECTION
+// ═══════════════════════════════════════════════════════
+function detectStops(pts) {
+  const segments = []; let i = 0;
+  while (i < pts.length) {
+    if (pts[i]._spd < 2) {
+      let j = i;
+      while (j < pts.length && pts[j]._spd < 2) j++;
+      if (j - i >= 2) { // at least 2 consecutive slow points
+        const latC = pts.slice(i,j).reduce((a,p)=>a+p._lat,0)/(j-i);
+        const lngC = pts.slice(i,j).reduce((a,p)=>a+p._lng,0)/(j-i);
+        segments.push({ idx_start:i, idx_end:j-1, lat:latC, lng:lngC,
+          ts_start:pts[i].ts, ts_end:pts[j-1].ts, ignition:pts[i]._ign });
+      }
+      i = j;
+    } else i++;
+  }
+  return segments;
+}
+
+function detectTrips(pts, stopSegs) {
+  // Trips = moving segments between stops
+  const trips = [];
+  let tripStart = 0;
+  for (const s of stopSegs) {
+    if (s.idx_start > tripStart) {
+      const seg = pts.slice(tripStart, s.idx_start+1);
+      const dist = seg.reduce((a,p,i)=>i?a+haversine(seg[i-1],p):0,0);
+      const maxSpd = Math.max(...seg.map(p=>p._spd));
+      const avgSpd = seg.reduce((a,p)=>a+p._spd,0)/seg.length;
+      trips.push({idx_start:tripStart, idx_end:s.idx_start, pts:seg,
+        ts_start:pts[tripStart].ts, ts_end:pts[s.idx_start].ts,
+        dist, maxSpd, avgSpd});
+    }
+    tripStart = s.idx_end + 1;
+  }
+  // Final trip after last stop
+  if (tripStart < pts.length - 1) {
+    const seg = pts.slice(tripStart);
+    const dist = seg.reduce((a,p,i)=>i?a+haversine(seg[i-1],p):0,0);
+    trips.push({idx_start:tripStart, idx_end:pts.length-1, pts:seg,
+      ts_start:pts[tripStart].ts, ts_end:pts[pts.length-1].ts,
+      dist, maxSpd:Math.max(...seg.map(p=>p._spd)),
+      avgSpd:seg.reduce((a,p)=>a+p._spd,0)/seg.length});
+  }
+  return trips;
+}
+
+function fmtDuration(ms) {
+  const s = Math.max(0, ms/1000);
+  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60);
+  return h ? `${h}h ${m}m` : `${m}m`;
+}
+
+// ═══════════════════════════════════════════════════════
+// LOAD TRACK
+// ═══════════════════════════════════════════════════════
+async function loadTrack() {
+  const imei = document.getElementById('f-device').value;
+  const date = document.getElementById('f-date').value;
+  const from = document.getElementById('f-from').value || '00:00';
+  const to   = document.getElementById('f-to').value   || '23:59';
+  if (!imei) { showToast('⚠ Select a device first'); return; }
+  if (!date) { showToast('⚠ Select a date first'); return; }
+  stopPlayback();
+  const btn = document.getElementById('load-btn');
+  btn.disabled = true; btn.textContent = '⏳ Loading…';
+  document.getElementById('loading-overlay').classList.add('show');
+  try {
+    const raw = await apiFetch(`/playback/${imei}?date=${date}&from=${from}&to=${to}`);
+    if (!Array.isArray(raw) || !raw.length) {
+      showToast('⚠ No GPS data for this date/range');
+      return;
+    }
+    track = raw.filter(p=>p.latitude&&p.longitude).map(p=>({
+      ts:p.ts, _lat:+p.latitude, _lng:+p.longitude,
+      _spd:+(p.speed||0), _hdg:0, _ign:p.ignition||false,
+    }));
+    // Headings
+    for (let i=0; i<track.length; i++)
+      track[i]._hdg = (i+1<track.length) ? bearing(track[i],track[i+1]) : (track[i-1]?._hdg||0);
+
+    idx = 0; accum = 0;
+    stops = detectStops(track);
+    trips = detectTrips(track, stops);
+
+    drawTrack();
+    drawStopPins();
+    drawTripSegments();
+    computeTimeBuckets();
+    updateStopChips();
+    render();
+
+    // Stats
+    const dist = track.reduce((a,p,i)=>i?a+haversine(track[i-1],p):0,0);
+    const maxS  = Math.max(...track.map(p=>p._spd));
+    const avgS  = track.reduce((a,p)=>a+p._spd,0)/track.length;
+    const durMs = new Date(track[track.length-1].ts)-new Date(track[0].ts);
+    const durM  = Math.max(0, durMs/60000);
+    setStat('s-dist',  dist.toFixed(1)+' km');
+    setStat('s-max',   maxS.toFixed(0)+' km/h');
+    setStat('s-avg',   avgS.toFixed(0)+' km/h');
+    setStat('s-stops', stops.length);
+    setStat('s-dur',   Math.floor(durM/60)+'h '+Math.floor(durM%60)+'m');
+    setStat('s-pts',   track.length);
+    document.getElementById('pt-badge').textContent = track.length+' pts';
+    document.getElementById('pt-badge').style.display = '';
+    document.getElementById('empty').style.display = 'none';
+    document.getElementById('hud').style.display = '';
+    document.getElementById('rel-hud').style.display = '';
+    const sub = document.getElementById('pb-header-sub');
+    if(sub) sub.textContent = `${track.length} pts · ${stops.length} stops · ${dist.toFixed(1)} km`;
+    showToast(`✓ ${track.length} points · ${stops.length} stops`);
+  } catch(e) {
+    showToast('Error: '+e.message);
+  } finally {
+    document.getElementById('loading-overlay').classList.remove('show');
+    btn.disabled = false; btn.textContent = '⬇ Load Track';
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// MAP DRAWING
+// ═══════════════════════════════════════════════════════
+function drawTrack() {
+  if (!map || !track.length) return;
+  [polyline, startMk, endMk, marker].forEach(l => { if(l) map.removeLayer(l); });
+  polyline = startMk = endMk = marker = null;
+  stopMarkers.forEach(m=>map.removeLayer(m)); stopMarkers=[];
+  tripSegments.forEach(l=>map.removeLayer(l)); tripSegments=[];
+
+  const lls = track.map(p=>[p._lat,p._lng]);
+  // Base track (faint grey)
+  polyline = L.polyline(lls,{color:'#334155',weight:3,opacity:.5}).addTo(map);
+
+  const pin = (color, lbl) => L.divIcon({
+    className:'', iconSize:[22,22], iconAnchor:[11,11],
+    html:`<div style="width:22px;height:22px;border-radius:50%;background:${color};border:2.5px solid #fff;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.5)">${lbl}</div>`
+  });
+  startMk = L.marker(lls[0], {icon:pin('#16a34a','S')}).addTo(map).bindTooltip('Start: '+fmtTime(track[0].ts));
+  endMk   = L.marker(lls[lls.length-1], {icon:pin('#dc2626','E')}).addTo(map).bindTooltip('End: '+fmtTime(track[track.length-1].ts));
+  map.fitBounds(polyline.getBounds(), {padding:[50,50]});
+  setTimeout(()=>map.invalidateSize(),100);
+}
+
+function drawStopPins() {
+  stopMarkers.forEach(m=>map.removeLayer(m)); stopMarkers=[];
+  stops.forEach((s,i) => {
+    const durMs = new Date(s.ts_end)-new Date(s.ts_start);
+    const icon = L.divIcon({
+      className:'', iconSize:[28,28], iconAnchor:[14,14],
+      html:`<div style="width:28px;height:28px;border-radius:50%;background:#0f172a;border:2px solid ${s.ignition?'#f59e0b':'#64748b'};display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:${s.ignition?'#f59e0b':'#94a3b8'};box-shadow:0 2px 8px rgba(0,0,0,.6)">${i+1}</div>`
+    });
+    const mk = L.marker([s.lat,s.lng],{icon,zIndexOffset:800})
+      .bindTooltip(`Stop #${i+1}<br>${fmtTime(s.ts_start)} → ${fmtTime(s.ts_end)}<br>Duration: ${fmtDuration(durMs)}`)
+      .addTo(map);
+    mk.on('click',()=>jumpToStop(i));
+    stopMarkers.push(mk);
+  });
+}
+
+function drawTripSegments() {
+  tripSegments.forEach(l=>map.removeLayer(l)); tripSegments=[];
+  trips.forEach((t,i) => {
+    const color = t.avgSpd > 80 ? '#ef4444' : t.avgSpd > 40 ? '#f59e0b' : '#22c55e';
+    const seg = L.polyline(t.pts.map(p=>[p._lat,p._lng]),
+      {color, weight:4, opacity:.8}).addTo(map);
+    seg.on('click', () => {
+      const durMs = new Date(t.ts_end)-new Date(t.ts_start);
+      seg.bindPopup(`
+        <div style="min-width:160px">
+          <div style="font-weight:700;font-size:13px;margin-bottom:6px">🚗 Trip #${i+1}</div>
+          <div style="font-size:12px;color:#94a3b8">Start: <b style="color:#e2e8f0">${fmtTime(t.ts_start)}</b></div>
+          <div style="font-size:12px;color:#94a3b8">End: <b style="color:#e2e8f0">${fmtTime(t.ts_end)}</b></div>
+          <div style="font-size:12px;color:#94a3b8">Distance: <b style="color:#e2e8f0">${t.dist.toFixed(2)} km</b></div>
+          <div style="font-size:12px;color:#94a3b8">Avg Speed: <b style="color:#e2e8f0">${t.avgSpd.toFixed(0)} km/h</b></div>
+          <div style="font-size:12px;color:#94a3b8">Max Speed: <b style="color:#e2e8f0">${t.maxSpd.toFixed(0)} km/h</b></div>
+          <div style="font-size:12px;color:#94a3b8">Duration: <b style="color:#e2e8f0">${fmtDuration(durMs)}</b></div>
+        </div>`).openPopup();
+    });
+    tripSegments.push(seg);
+  });
+}
+
+function computeTimeBuckets() {
+  let moveMs=0, idleMs=0, stopMs=0;
+  for (let i=1; i<track.length; i++) {
+    const dt = new Date(track[i].ts)-new Date(track[i-1].ts);
+    if (dt < 0 || dt > 300000) continue; // skip gaps > 5 min
+    if (track[i-1]._spd >= 2)           moveMs += dt;
+    else if (track[i-1]._ign)           idleMs += dt;
+    else                                 stopMs += dt;
+  }
+  document.getElementById('tb-move').textContent = fmtDuration(moveMs);
+  document.getElementById('tb-idle').textContent = fmtDuration(idleMs);
+  document.getElementById('tb-stop').textContent = fmtDuration(stopMs);
+}
+
+function updateStopChips() {
+  const el = document.getElementById('stop-chips');
+  const wrap = document.getElementById('stop-summary');
+  if (!stops.length) { wrap.style.display='none'; return; }
+  wrap.style.display='';
+  el.innerHTML = stops.map((s,i)=>`<div class="stop-chip" onclick="jumpToStop(${i})">#${i+1} ${fmtTime(s.ts_start)}</div>`).join('');
+}
+
+function jumpToStop(i) {
+  if (!stops[i]) return;
+  idx = stops[i].idx_start; accum = 0; render();
+  map.setView([stops[i].lat, stops[i].lng], 15);
+  stopPlayback();
+}
+
+// ═══════════════════════════════════════════════════════
+// RENDER
+// ═══════════════════════════════════════════════════════
+function render() {
+  if (!track.length) return;
+  const p   = track[idx];
+  const pct = idx / Math.max(track.length-1,1) * 100;
+  document.getElementById('tl-fill').style.width  = pct+'%';
+  document.getElementById('tl-thumb').style.left  = pct+'%';
+  document.getElementById('ts-badge').textContent = p.ts ? fmtTime(p.ts) : '--:--:--';
+  document.getElementById('h-ts').textContent     = p.ts ? fmtDateTime(p.ts) : '—';
+  document.getElementById('h-coord').textContent  = p._lat.toFixed(5)+', '+p._lng.toFixed(5);
+  document.getElementById('h-spd').textContent    = p._spd.toFixed(1)+' km/h';
+  document.getElementById('h-hdg').textContent    = Math.round(p._hdg)+'°';
+  document.getElementById('h-ign').textContent    = p._ign ? '🟢 ON' : '⚫ OFF';
+
+  // Relative live stats
+  if (playing || idx > 0) {
+    const distFromStart = track.slice(0,idx+1).reduce((a,pt,i)=>i?a+haversine(track[i-1],pt):0,0);
+    const elapsedMs = new Date(p.ts)-new Date(track[0].ts);
+    const nextStop = stops.find(s=>s.idx_start > idx);
+    const distToStop = nextStop
+      ? track.slice(idx, nextStop.idx_start+1).reduce((a,pt,i)=>i?a+haversine(track[idx+i-1],pt):0,0)
+      : null;
+    document.getElementById('rel-dist').textContent    = distFromStart.toFixed(2)+' km';
+    document.getElementById('rel-elapsed').textContent = fmtDuration(elapsedMs);
+    document.getElementById('rel-spd').textContent     = p._spd.toFixed(1)+' km/h';
+    document.getElementById('rel-next-stop').textContent = distToStop != null ? distToStop.toFixed(2)+' km' : '—';
+  }
+
+  if (!map) return;
+  const pos  = [p._lat, p._lng];
+  const icon = L.divIcon({className:'',html:vehicleSVG(vtype,p._hdg),iconSize:[46,46],iconAnchor:[23,23]});
+  if (!marker) { marker = L.marker(pos,{icon,zIndexOffset:1000}).addTo(map); }
+  else { marker.setLatLng(pos); marker.setIcon(icon); }
+  if (playing) map.panTo(pos, {animate:true,duration:0.2,easeLinearity:1});
+}
+
+// ═══════════════════════════════════════════════════════
+// PLAYBACK ENGINE
+// ═══════════════════════════════════════════════════════
+function rafTick(now) {
+  if (!playing) return;
+  if (lastTs) {
+    const dt = Math.min(now-lastTs, 200);
+    accum += dt * speed;
+    const msPerPt = 1000;
+    while (accum >= msPerPt && idx < track.length-1) { accum -= msPerPt; idx++; }
+    if (idx >= track.length-1) {
+      idx = track.length-1; render(); stopPlayback(); showToast('✓ Playback complete'); return;
+    }
+  }
+  lastTs = now; render(); rafId = requestAnimationFrame(rafTick);
+}
+
+function stopPlayback() {
+  if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+  playing = false; lastTs = 0; accum = 0;
+  const btn = document.getElementById('playbtn');
+  btn.textContent = '▶'; btn.classList.remove('playing');
+}
+
+function togglePlay() {
+  if (!track.length) { showToast('⚠ Load a track first'); return; }
+  if (playing) { stopPlayback(); return; }
+  if (idx >= track.length-1) { idx = 0; accum = 0; }
+  playing = true;
+  const btn = document.getElementById('playbtn');
+  btn.textContent = '⏸'; btn.classList.add('playing');
+  lastTs = 0; accum = 0; rafId = requestAnimationFrame(rafTick);
+}
+
+function goRestart() { stopPlayback(); idx = 0; accum = 0; render(); }
+function goEnd()     { stopPlayback(); idx = track.length-1; render(); }
+function step(n)     { stopPlayback(); idx = Math.max(0,Math.min(track.length-1,idx+n)); accum=0; render(); }
+function setSpd(x, el) {
+  speed = x;
+  document.querySelectorAll('.spdbtn').forEach(b=>b.classList.remove('on'));
+  el.classList.add('on');
+}
+
+// Timeline seek
+function seekStart(e) {
+  seeking = true; seekMove(e);
+  const onMove = ev => { if(seeking) seekMove(ev); };
+  const onUp   = ()  => { seeking=false; document.removeEventListener('mousemove',onMove); document.removeEventListener('mouseup',onUp); };
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup',   onUp);
+}
+function seekMove(e) {
+  if (!track.length) return;
+  const r = document.getElementById('tl-track').getBoundingClientRect();
+  const cx = e.touches ? e.touches[0].clientX : e.clientX;
+  const pct = Math.max(0, Math.min(1,(cx-r.left)/r.width));
+  idx = Math.round(pct*(track.length-1)); accum = 0; render();
+}
+
+// ═══════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════
+function bearing(a,b) {
+  const lat1=a._lat*Math.PI/180, lat2=b._lat*Math.PI/180, dLon=(b._lng-a._lng)*Math.PI/180;
+  const y=Math.sin(dLon)*Math.cos(lat2);
+  const x=Math.cos(lat1)*Math.sin(lat2)-Math.sin(lat1)*Math.cos(lat2)*Math.cos(dLon);
+  return ((Math.atan2(y,x)*180/Math.PI)+360)%360;
+}
+function haversine(a,b) {
+  const R=6371, dLat=(b._lat-a._lat)*Math.PI/180, dLon=(b._lng-a._lng)*Math.PI/180;
+  const x=Math.sin(dLat/2)**2+Math.cos(a._lat*Math.PI/180)*Math.cos(b._lat*Math.PI/180)*Math.sin(dLon/2)**2;
+  return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));
+}
+function setStat(id,v) { const e=document.getElementById(id); if(e) e.textContent=v; }
+function fmtTime(ts)     { try{return new Date(ts).toLocaleTimeString('en-IN');}catch{return '--:--';} }
+function fmtDateTime(ts) { try{return new Date(ts).toLocaleString('en-IN');}catch{return '—';} }
+
+let toastTimer=null;
+function showToast(msg) {
+  const el=document.getElementById('toast'); el.textContent=msg; el.classList.add('show');
+  if(toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>el.classList.remove('show'), 2800);
+}
+
+function exportCSV() {
+  if(!track.length){showToast('⚠ No track loaded');return;}
+  const rows=[['Time','Lat','Lng','Speed_kmh','Heading_deg','Ignition'],
+    ...track.map(p=>[p.ts,p._lat,p._lng,p._spd.toFixed(1),Math.round(p._hdg),p._ign?1:0])];
+  const csv=rows.map(r=>r.join(',')).join('\n');
+  const a=document.createElement('a');
+  a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);
+  a.download='track_'+new Date().toISOString().slice(0,10)+'.csv'; a.click();
+}
+</script>
+</body>
+</html>

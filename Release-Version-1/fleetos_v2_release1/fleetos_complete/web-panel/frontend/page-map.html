@@ -1,0 +1,320 @@
+<!-- Fleet OS v2.0 — page-map.html -->
+<!-- Edit this file freely. Loaded dynamically by index.html. -->
+
+<div class="page" id="page-map" style="min-height:600px;padding:0">
+<style>
+#map-shell{display:flex;height:calc(100vh - 56px);gap:0;background:#f8fafc;}
+#map-sidebar{width:290px;flex-shrink:0;background:#fff;border-right:1px solid #e5e7eb;display:flex;flex-direction:column;overflow:hidden;}
+#map-sidebar-hdr{padding:12px 14px 8px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;justify-content:space-between;}
+#map-sidebar-list{flex:1;overflow-y:auto;padding:6px 0;}
+#map-main{flex:1;display:flex;flex-direction:column;min-width:0;}
+#map-toolbar{padding:8px 12px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+#live-map{flex:1;min-height:0;}
+.msv-row{display:flex;align-items:center;gap:8px;padding:7px 12px;cursor:pointer;border-bottom:1px solid #f8fafc;transition:background .12s;}
+.msv-row:hover{background:#f0f9ff;}
+.msv-row.msv-sel{background:#eff6ff;border-left:3px solid #3b82f6;}
+.msv-icon{width:36px;height:36px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+.msv-info{flex:1;min-width:0;}
+.msv-name{font-size:12.5px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.msv-sub{font-size:11px;color:#94a3b8;display:flex;gap:8px;margin-top:2px;flex-wrap:wrap;}
+.msv-stats{display:flex;gap:4px;flex-wrap:wrap;margin-top:3px;}
+.msv-pill{font-size:10px;padding:1px 6px;border-radius:99px;font-weight:600;}
+.pill-moving{background:#dcfce7;color:#16a34a;}
+.pill-idle{background:#fef9c3;color:#ca8a04;}
+.pill-stopped{background:#f1f5f9;color:#64748b;}
+.pill-offline{background:#fee2e2;color:#dc2626;}
+.pill-ignOn{background:#dbeafe;color:#2563eb;}
+.pill-ignOff{background:#f1f5f9;color:#475569;}
+.pill-cut{background:#fef2f2;color:#dc2626;}
+</style>
+<div id="map-shell">
+  <div id="map-sidebar">
+    <div id="map-sidebar-hdr">
+      <div style="font-size:13px;font-weight:700;color:#0f172a">🗺 Live Fleet</div>
+      <div id="map-live-count" style="font-size:11px;color:#64748b"></div>
+    </div>
+    <div style="padding:6px 10px;border-bottom:1px solid #f1f5f9;">
+      <select class="fselect" id="map-filter-sel" style="width:100%;padding:5px 8px;font-size:11.5px" onchange="applyMapFilter()">
+        <option value="all">All Vehicles</option>
+        <option value="moving">🟢 Moving</option>
+        <option value="idle">🟡 Idle (engine on)</option>
+        <option value="stopped">⚫ Stopped</option>
+        <option value="offline">🔴 Offline</option>
+        <option value="never_connected">⬜ Never Connected</option>
+      </select>
+    </div>
+    <div id="map-sidebar-list"></div>
+  </div>
+  <div id="map-main">
+    <div id="map-toolbar">
+      <button class="btn btn-secondary btn-sm" onclick="renderMap()">🔄 Refresh</button>
+      <button class="btn btn-secondary btn-sm" onclick="fitMapBounds()">⊙ Fit All</button>
+      <div style="margin-left:auto;font-size:12px;color:var(--muted)" id="map-last-refresh"></div>
+    </div>
+    <div id="live-map" style="flex:1;min-height:400px;"></div>
+  </div>
+</div>
+</div>
+</div>
+
+<script type="text/fleetmodule" data-page="map">
+// ── map state ─────────────────────────────────────────
+let _liveMap = null, _liveMarkers = {};
+let _mapDevs = [];
+let _stateDurations = {}; // {imei: {h,m,status}}
+let _liveMapTimer = null;
+
+async function renderMap(){
+  try {
+    if (!_liveMap) { _initLiveMap(()=>{ renderMap(); }); return; }
+    const devs = await apiGet('/live');
+    if(!devs || !Array.isArray(devs)) return;
+    _mapDevs = devs;
+
+    const currentImeis = new Set(devs.map(d=>d.imei));
+    Object.keys(_liveMarkers).forEach(imei => {
+      if (!currentImeis.has(imei)) { _liveMap.removeLayer(_liveMarkers[imei].marker); delete _liveMarkers[imei]; }
+    });
+
+    const withGPS = devs.filter(d => d.latitude && d.longitude);
+    withGPS.forEach(d => {
+      const lat = parseFloat(d.latitude), lng = parseFloat(d.longitude);
+      const spd = parseFloat(d.speed) || 0;
+      const popup = buildMapPopup(d);
+      if (_liveMarkers[d.imei]) {
+        _liveMarkers[d.imei].marker.setLatLng([lat,lng]).setIcon(_liveMarkerIcon(d));
+        _liveMarkers[d.imei].marker.getPopup().setContent(popup);
+      } else {
+        const marker = L.marker([lat,lng], {icon: _liveMarkerIcon(d)}).bindPopup(popup).addTo(_liveMap);
+        _liveMarkers[d.imei] = {marker, status: d.status};
+      }
+    });
+    if (!withGPS.length) _liveMap.setView([20.5937, 78.9629], 5);
+    else if (withGPS.length === 1) _liveMap.setView([parseFloat(withGPS[0].latitude), parseFloat(withGPS[0].longitude)], 13);
+
+    // ── Sidebar vehicle list ──────────────────────────────────────
+    const listEl = document.getElementById('map-sidebar-list');
+    if (listEl) {
+      const filter = document.getElementById('map-filter-sel')?.value || 'all';
+      const filtered = filter==='all' ? devs : devs.filter(d => d.status===filter);
+      listEl.innerHTML = filtered.map(d => {
+        const spd = parseFloat(d.speed)||0;
+        const igns = d.ignition ? '<span class="msv-pill pill-ignOn">🔑 ON</span>' : '<span class="msv-pill pill-ignOff">🔑 OFF</span>';
+        const cutPill = d.engine_cut ? '<span class="msv-pill pill-cut">✂️ CUT</span>' : '';
+        const satPill = `<span class="msv-pill pill-stopped">🛰${d.satellites||0}</span>`;
+        const chgPill = d.charging ? '<span class="msv-pill pill-ignOn">⚡</span>' : '';
+        const stPill = `<span class="msv-pill pill-${d.status||'offline'}">${(d.status||'offline').toUpperCase()}</span>`;
+        const svg = _vehSvgMap(d.vehicle_type||'car', d.status, d.heading||0);
+        // Use server-side state_mins if available, else use cached duration
+        const serverDur = d.state_mins != null ? {h:Math.floor(d.state_mins/60),m:d.state_mins%60} : null;
+        const dur = serverDur || _stateDurations[d.imei];
+        const durStr = dur ? `${dur.h}h ${dur.m}m` : '';
+        const durColor = d.status==='moving'?'#22c55e':d.status==='idle'?'#f59e0b':d.status==='stopped'?'#94a3b8':'#ef4444';
+        return `<div class="msv-row" id="msv-${d.imei}">
+          <div class="msv-icon" onclick="if(_liveMap&&${!!d.latitude}){_liveMap.setView([${d.latitude||20},${d.longitude||78}],15);_liveMarkers['${d.imei}']?.marker.openPopup();}">${svg}</div>
+          <div class="msv-info" style="flex:1;min-width:0">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:4px">
+              <div class="msv-name">${d.name}</div>
+              <div style="display:flex;gap:3px;flex-shrink:0">
+                <button title="Playback" onclick="openPlaybackForImei('${d.imei}')"
+                  style="border:none;background:none;cursor:pointer;font-size:11px;padding:1px 4px;border-radius:4px;background:#1e293b;color:#94a3b8">▶</button>
+                <button title="${d.engine_cut?'Restore':'Cut Engine'}" onclick="openEngineCutModal('${d.imei}','${d.name}',${!!d.engine_cut})"
+                  style="border:none;cursor:pointer;font-size:10px;padding:1px 5px;border-radius:4px;background:${d.engine_cut?'#16a34a':'#7f1d1d'};color:#fff">
+                  ${d.engine_cut?'✅':'✂️'}</button>
+              </div>
+            </div>
+            <div class="msv-sub" style="margin-top:2px">
+              <span style="color:${durColor};font-weight:700">${stPill.replace(/[<][^>]*[>]/g,'').trim()} ${durStr}</span>
+              ${d.address_short?`<span style="overflow:hidden;max-width:100px;white-space:nowrap;text-overflow:ellipsis;color:#475569">${d.address_short}</span>`:''}
+            </div>
+            <div class="msv-stats" style="margin-top:3px">
+              ${igns}${chgPill}${cutPill}
+              <span class="msv-pill pill-stopped" title="Satellites">🛰${d.satellites||0}</span>
+              ${d.driver_name?`<span class="msv-pill" style="background:#f0fdf4;color:#16a34a">👤${d.driver_name.split(' ')[0]}</span>`:''}
+              ${d.safe_parking?'<span class="msv-pill" style="background:#f5f3ff;color:#7c3aed">🔒Parked</span>':''}
+              ${(d.in_geofences||[]).map(g=>`<span class="msv-pill" style="background:#eff6ff;color:#3b82f6;font-size:9px">📍${g}</span>`).join('')}
+              ${d.status==='never_connected'?'<span class="msv-pill" style="background:#f1f5f9;color:#94a3b8;font-size:9px">Never seen</span>':''}
+            </div>
+            <div style="font-size:10px;color:#64748b;margin-top:2px">
+              ${spd.toFixed(0)} km/h &nbsp;·&nbsp; ${d.last_seen||d.ts?'Last: '+fmtTs(d.last_seen||d.ts):'Never seen'}
+            </div>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    const ct = document.getElementById('map-live-count');
+    if (ct) ct.textContent = `${withGPS.length}/${devs.length} w/GPS`;
+    const lr = document.getElementById('map-last-refresh');
+    if (lr) lr.textContent = 'Updated ' + new Date().toLocaleTimeString('en-IN');
+    // Start auto-refresh if not running
+    if (!_liveMapTimer) {
+      _liveMapTimer = setInterval(()=>{
+        if(document.getElementById('page-map')?.classList.contains('active')) renderMap();
+      }, 20000);
+    }
+    // Load state durations async (non-blocking)
+    _loadStateDurations(devs);
+
+    // Populate playback device selector
+    const sel = document.getElementById('pb-device');
+    if (sel) sel.innerHTML = '<option value="">— Select device —</option>' + devs.map(d=>`<option value="${d.imei}">${d.name} (${d.imei})</option>`).join('');
+  } catch(e) { console.warn('[renderMap]', e.message); }
+}
+
+function onMapVisible() {
+  setTimeout(()=>{
+    if (_liveMap) { _liveMap.invalidateSize(); return; }
+    renderMap(); // triggers _initLiveMap on first visit
+  }, 150);
+}
+
+function _initLiveMap(cb) {
+  if (_liveMap) { if(cb) cb(); return; }
+  const el = document.getElementById('live-map');
+  if (!el) return;
+  // Wait two frames so display:block and height are settled
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (_liveMap) { if(cb) cb(); return; }
+    _liveMap = L.map('live-map', {zoomControl: true, attributionControl: true});
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      maxZoom: 19
+    }).addTo(_liveMap);
+    _liveMap.setView([20.5937, 78.9629], 5); // India center
+    if(cb) cb();
+  }));
+}
+
+function _markerIcon(status) {
+  const colors = {online:'#22C55E', idle:'#F59E0B', offline:'#94A3B8', alarm:'#EF4444'};
+  const c = colors[status] || colors.offline;
+  return L.divIcon({
+    className: '',
+    html: `<div style="width:14px;height:14px;border-radius:50%;background:${c};border:2px solid #fff;box-shadow:0 0 6px ${c}88;"></div>`,
+    iconSize: [14,14], iconAnchor: [7,7], popupAnchor: [0,-10]
+  });
+}
+
+function _liveMarkerIcon(dev) {
+  const status = dev.status || 'offline';
+  const svg = _vehSvgMap(dev.vehicle_type||'car', status, dev.heading||0);
+  const blob = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  return L.icon({iconUrl: blob, iconSize:[24,24], iconAnchor:[12,12], popupAnchor:[0,-14]});
+}
+
+function _vehSvgMap(type, status, heading) {
+  const hue = {moving:'#22c55e',idle:'#f59e0b',stopped:'#64748b',offline:'#ef4444'}[status]||'#3b82f6';
+  const r = heading||0;
+  const body = /bike|motor/i.test(type) ? `<ellipse cx="12" cy="12" rx="4" ry="10" fill="${hue}"/><ellipse cx="12" cy="5" rx="3" ry="4" fill="${hue}" opacity=".7"/>` :
+               /bus|coach/i.test(type)  ? `<rect x="4" y="2" width="16" height="20" rx="3" fill="${hue}"/><rect x="5" y="3" width="14" height="5" rx="1" fill="white" opacity=".5"/>` :
+               /truck/i.test(type)      ? `<rect x="3" y="2" width="18" height="20" rx="2" fill="${hue}"/><rect x="4" y="3" width="16" height="6" rx="1" fill="white" opacity=".4"/>` :
+               /auto|rick/i.test(type)  ? `<path d="M4 14 Q6 4 12 4 Q18 4 20 14 L20 22 L4 22 Z" fill="${hue}"/><rect x="6" y="8" width="12" height="7" rx="2" fill="white" opacity=".3"/>` :
+               `<rect x="5" y="3" width="14" height="18" rx="4" fill="${hue}"/><rect x="6" y="4" width="12" height="6" rx="2" fill="white" opacity=".5"/>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><g transform="rotate(${r},12,12)">${body}</g></svg>`;
+}
+
+function applyMapFilter() {
+  const f = document.getElementById('map-filter-sel')?.value || 'all';
+  // Filter map markers
+  Object.entries(_liveMarkers).forEach(([imei, info]) => {
+    const d = (_mapDevs||[]).find(x=>x.imei===imei);
+    const st = d?.status || info.status || 'offline';
+    const show = f === 'all' || st === f;
+    if (show) info.marker.addTo(_liveMap);
+    else _liveMap.removeLayer(info.marker);
+  });
+  // Re-render sidebar list with filter
+  const listEl = document.getElementById('map-sidebar-list');
+  if (listEl && _mapDevs) {
+    const filtered = f === 'all' ? _mapDevs : _mapDevs.filter(d => (d.status||'offline') === f);
+    const ct = document.getElementById('map-live-count');
+    if (ct) ct.textContent = `${filtered.length}/${_mapDevs.length}`;
+    // Trigger sidebar re-render via renderMap (it reads the filter itself)
+    renderMap();
+  }
+}
+
+function fitMapBounds() {
+  if (!_liveMap) return;
+  const pts = Object.values(_liveMarkers).map(m => m.marker.getLatLng());
+  if (pts.length) _liveMap.fitBounds(L.latLngBounds(pts), {padding:[30,30]});
+}
+
+async function _loadStateDurations(devs){
+  if(!devs||!devs.length) return;
+  const sample=devs.filter(d=>d.latitude).slice(0,10);
+  for(const d of sample){
+    try{
+      const r=await apiGet('/vehicle-state/'+d.imei);
+      if(r&&r.duration_min!==undefined){
+        const h=Math.floor(r.duration_min/60),m=r.duration_min%60;
+        _stateDurations[d.imei]={h,m,status:r.status};
+      }
+    }catch{}
+  }
+}
+
+function buildMapPopup(d){
+  const spd=parseFloat(d.speed)||0;
+  const dur=_stateDurations[d.imei];
+  const durStr=dur?`${dur.h}h ${dur.m}m`:'—';
+  const lat=parseFloat(d.latitude||0).toFixed(5);
+  const lng=parseFloat(d.longitude||0).toFixed(5);
+  return `<div style="min-width:200px;font-family:sans-serif">
+    <div style="font-weight:800;font-size:14px;margin-bottom:4px">${d.name}</div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:8px">${d.imei}</div>
+    <table style="font-size:12px;width:100%;border-collapse:collapse">
+      <tr><td style="color:#64748b;padding:2px 0">🚀 Speed</td><td style="font-weight:700">${spd.toFixed(0)} km/h</td></tr>
+      <tr><td style="color:#64748b;padding:2px 0">🔑 Ignition</td><td style="font-weight:700;color:${d.ignition?'#16a34a':'#ef4444'}">${d.ignition?'ON':'OFF'}</td></tr>
+      <tr><td style="color:#64748b;padding:2px 0">⚡ Charging</td><td>${d.charging?'Yes':'No'}</td></tr>
+      <tr><td style="color:#64748b;padding:2px 0">🛰 Satellites</td><td>${d.satellites||0}</td></tr>
+      <tr><td style="color:#64748b;padding:2px 0">📍 Location</td><td class="mono" style="font-size:10px">${lat}, ${lng}</td></tr>
+      ${d.address_short?`<tr><td style="color:#64748b;padding:2px 0">🏠 Address</td><td style="font-size:11px">${d.address_short}</td></tr>`:''}
+      ${d.driver_name?`<tr><td style="color:#64748b;padding:2px 0">👤 Driver</td><td>${d.driver_name}</td></tr>`:''}
+      <tr><td style="color:#64748b;padding:2px 0">⏱ State</td><td style="font-weight:700">${d.status||'unknown'} ${durStr}</td></tr>
+      <tr><td style="color:#64748b;padding:2px 0">🕐 Last seen</td><td>${d.ts?new Date(d.ts).toLocaleString('en-IN'):'Never'}</td></tr>
+      ${d.engine_cut?'<tr><td colspan="2" style="color:#dc2626;font-weight:700;padding-top:4px">✂️ ENGINE IMMOBILISED</td></tr>':''}
+    </table>
+    ${(d.in_geofences||[]).length?`<div style="margin-top:4px;font-size:11px;color:#3b82f6">📍 In: ${(d.in_geofences||[]).join(', ')}</div>`:''}
+    ${d.safe_parking?'<div style="margin-top:2px;font-size:11px;color:#7c3aed;font-weight:600">🔒 Safe Parking Active</div>':''}
+    <div style="display:flex;gap:4px;margin-top:8px;flex-wrap:wrap">
+      <button onclick="openPlaybackForImei('${d.imei}')"
+        style="flex:1;padding:5px;background:#1d4ed8;color:#fff;border:none;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;min-width:60px">▶ Replay</button>
+      <button onclick="nav('events')"
+        style="flex:1;padding:5px;background:#7c3aed;color:#fff;border:none;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;min-width:60px">🔔 Alerts</button>
+      <button onclick="openEngineCutModal('${d.imei}','${d.name}',${!!d.engine_cut})"
+        style="flex:1;padding:5px;background:${d.engine_cut?'#16a34a':'#dc2626'};color:#fff;border:none;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;min-width:60px">
+        ${d.engine_cut?'✅ Restore':'✂️ Cut'}</button>
+    </div>
+  </div>`;
+}
+
+function openPlaybackForImei(imei){
+  localStorage.setItem('pb_preload_imei',imei);openPlayback();
+}
+
+function openEngineCutModal(imei,name,isCut){
+  document.getElementById('ecm-imei').value=imei;
+  document.getElementById('ecm-cmd').value=isCut?'engine_restore':'engine_cut';
+  document.getElementById('ecm-title').textContent=isCut?'Restore Engine':'Engine Cut';
+  document.getElementById('ecm-body').innerHTML=isCut
+    ?`<p>Restore engine on <b>${name}</b>?<br>Vehicle will be able to start again.</p>`
+    :`<p>Cut engine on <b>${name}</b>?<br><span style="color:#dc2626;font-weight:700">⚠️ Vehicle will be immobilised.</span></p>`;
+  const btn=document.getElementById('ecm-confirm-btn');
+  btn.textContent=isCut?'✅ Restore':'✂️ Cut Engine';
+  btn.style.background=isCut?'#16a34a':'#dc2626';
+  openModal('engineCutModal');
+}
+
+async function execEngineCut(){
+  const imei=document.getElementById('ecm-imei').value;
+  const cmd=document.getElementById('ecm-cmd').value;
+  try{
+    await apiPost('/device-commands',{imei,command:cmd});
+    toast(cmd==='engine_cut'?'Engine cut sent':'Engine restored','success',cmd==='engine_cut'?'✂️':'✅');
+    closeModal('engineCutModal');setTimeout(renderMap,500);
+  }catch(e){toast('Error: '+e.message,'error');}
+}
+
+</script>

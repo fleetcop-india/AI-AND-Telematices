@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fleet OS · Agent Manager</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;500;600;700&display=swap');
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --ink:#030508;--ink1:#080d14;--ink2:#0c1520;--ink3:#111c2a;--ink4:#172333;
+  --wire:rgba(0,200,180,.08);--wire2:rgba(0,200,180,.14);
+  --tx:#b8d4e8;--tx2:#6a90b0;--tx3:#3a5870;
+  --gn:#00e5a0;--gn2:rgba(0,229,160,.12);
+  --rd:#ff4060;--rd2:rgba(255,64,96,.12);
+  --am:#ffb020;--am2:rgba(255,176,32,.12);
+  --bl:#0090ff;--bl2:rgba(0,144,255,.12);
+  --cy:#00d4cc;--cy2:rgba(0,212,204,.10);
+  --pu:#a040ff;
+  --mono:'Share Tech Mono',monospace;
+  --head:'Rajdhani',sans-serif;
+}
+html,body{height:100%;overflow:hidden}
+body{font-family:var(--head);background:var(--ink);color:var(--tx);display:flex;flex-direction:column}
+body::before{
+  content:'';position:fixed;inset:0;z-index:0;pointer-events:none;
+  background:
+    radial-gradient(ellipse 55% 45% at 15% 85%,rgba(0,144,255,.04) 0%,transparent 70%),
+    radial-gradient(ellipse 45% 55% at 85% 15%,rgba(0,229,160,.03) 0%,transparent 70%),
+    linear-gradient(rgba(0,200,180,.022) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(0,200,180,.022) 1px,transparent 1px);
+  background-size:auto,auto,56px 56px,56px 56px;
+}
+body::after{
+  content:'';position:fixed;inset:0;z-index:9999;pointer-events:none;
+  background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,0,0,.05) 3px,rgba(0,0,0,.05) 4px);
+}
+
+/* ─── TOPBAR ─── */
+.bar{position:relative;z-index:10;height:52px;flex-shrink:0;background:rgba(8,13,20,.98);border-bottom:1px solid var(--wire2);display:flex;align-items:center;padding:0 20px;gap:16px}
+.logo{font-family:var(--mono);font-size:22px;color:var(--cy);letter-spacing:-3px;text-shadow:0 0 24px rgba(0,212,204,.7);flex-shrink:0}
+.brand{border-left:2px solid var(--wire2);padding-left:14px}
+.brand-t{font-family:var(--head);font-size:15px;font-weight:700;color:#c8e4f8;letter-spacing:2px;text-transform:uppercase}
+.brand-s{font-family:var(--mono);font-size:9px;color:var(--tx3);letter-spacing:2px;margin-top:2px}
+.pill{display:flex;align-items:center;gap:6px;padding:4px 12px;border-radius:2px;border:1px solid var(--wire);font-family:var(--mono);font-size:10px;color:var(--tx2);background:rgba(0,200,180,.02)}
+.pldot{width:6px;height:6px;border-radius:50%}
+.glob{margin-left:auto;display:flex;align-items:center;gap:12px}
+.gbadge{display:flex;align-items:center;gap:8px;padding:6px 16px;border-radius:2px;border:1px solid var(--wire2);background:rgba(0,200,180,.03);font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:2px;transition:border-color .4s}
+.gdot{width:8px;height:8px;border-radius:50%;transition:all .4s;animation:blink 2s infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.45}}
+.gtxt{letter-spacing:2px;transition:color .4s}
+.gclock{font-family:var(--mono);font-size:11px;color:var(--tx3)}
+
+/* ─── LAYOUT ─── */
+.layout{flex:1;display:flex;min-height:0;position:relative;z-index:1}
+
+/* ─── CANVAS ─── */
+.czone{flex:1;position:relative;overflow:hidden}
+#cv{position:absolute;inset:0;width:100%;height:100%}
+#nl{position:absolute;inset:0;pointer-events:none}
+.ctag{position:absolute;font-family:var(--mono);font-size:9px;color:var(--tx3);letter-spacing:2px;text-transform:uppercase;pointer-events:none}
+.ctag-tl{top:14px;left:16px}
+.ctag-tr{top:14px;right:16px;text-align:right}
+.sc{display:flex;flex-direction:column;gap:4px}
+.sr{display:flex;align-items:baseline;gap:6px}
+.sv{font-family:var(--mono);font-size:22px;font-weight:700;line-height:1}
+.sl{font-family:var(--mono);font-size:9px;color:var(--tx3);letter-spacing:1px}
+
+/* ─── NODE CARDS ─── */
+.nd{position:absolute;transform:translate(-50%,-50%);pointer-events:auto;cursor:pointer}
+.nd:hover .nc{filter:brightness(1.1);border-color:var(--wire2)}
+.nd.sel .nc{outline:1.5px solid var(--bl);outline-offset:3px;box-shadow:0 0 24px rgba(0,144,255,.25),0 8px 32px rgba(0,0,0,.6)}
+.nc{
+  width:150px;background:var(--ink2);border:1px solid var(--wire);border-radius:3px;
+  padding:10px 12px 8px 14px;box-shadow:0 8px 32px rgba(0,0,0,.6);
+  transition:border-color .2s,filter .2s;position:relative;overflow:hidden;
+}
+.nc-bar{position:absolute;left:0;top:6px;bottom:6px;width:3px;border-radius:0 2px 2px 0;transition:box-shadow .3s}
+.nc.on {border-color:rgba(0,229,160,.18)}
+.nc.off{opacity:.58;border-color:rgba(255,64,96,.1)}
+.nc.db {background:linear-gradient(135deg,var(--ink2),var(--ink3));border-color:rgba(0,212,204,.16)}
+/* corner bracket top-left */
+.nc::before{content:'';position:absolute;top:-1px;left:-1px;width:10px;height:10px;border-top:2px solid var(--cy);border-left:2px solid var(--cy);opacity:.5}
+.nc::after{content:'';position:absolute;bottom:-1px;right:-1px;width:10px;height:10px;border-bottom:2px solid var(--cy);border-right:2px solid var(--cy);opacity:.5}
+.nt{display:flex;align-items:center;gap:8px;margin-bottom:7px}
+.ni{font-size:14px;flex-shrink:0}
+.nn{font-family:var(--head);font-size:13px;font-weight:700;letter-spacing:.4px;color:#cce4f8;line-height:1.2}
+.nid{font-family:var(--mono);font-size:8px;color:var(--tx3);margin-top:1px;letter-spacing:.5px}
+.ns{display:flex;align-items:center;gap:5px;margin-bottom:5px}
+.nsd{width:5px;height:5px;border-radius:50%;flex-shrink:0;transition:background .3s,box-shadow .3s}
+.nsl{font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:1.5px}
+.npps{margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--cy)}
+.nm{display:grid;grid-template-columns:1fr 1fr 1fr;gap:2px;border-top:1px solid rgba(0,200,180,.07);padding-top:6px}
+.nb{background:var(--ink3);border-radius:2px;padding:4px 5px;text-align:center}
+.nbv{font-family:var(--mono);font-size:11px;font-weight:700;line-height:1}
+.nbl{font-family:var(--mono);font-size:7px;color:var(--tx3);text-transform:uppercase;letter-spacing:.5px;margin-top:2px}
+
+/* ─── RIGHT PANEL ─── */
+.rp{width:298px;flex-shrink:0;background:var(--ink1);border-left:1px solid var(--wire2);display:flex;flex-direction:column;overflow:hidden}
+.tabs{display:flex;flex-shrink:0;border-bottom:1px solid var(--wire2)}
+.tab{flex:1;padding:10px 4px;text-align:center;font-family:var(--head);font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;cursor:pointer;color:var(--tx3);border-bottom:2px solid transparent;transition:color .15s,border-color .15s}
+.tab.on{color:var(--cy);border-color:var(--cy)}
+.ps{flex:1;overflow-y:auto;padding:12px;scrollbar-width:thin;scrollbar-color:rgba(0,200,180,.1) transparent}
+.ps::-webkit-scrollbar{width:3px}
+.ps::-webkit-scrollbar-thumb{background:rgba(0,200,180,.14);border-radius:2px}
+
+/* Agent rows */
+.arow{border:1px solid var(--wire);border-radius:3px;background:var(--ink2);padding:9px 10px 9px 13px;margin-bottom:6px;cursor:pointer;transition:border-color .15s,background .15s;position:relative}
+.arow::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:0;transition:background .2s,box-shadow .2s}
+.arow:hover{border-color:var(--wire2);background:var(--ink3)}
+.arow.active{border-color:rgba(0,144,255,.4);background:var(--ink3)}
+.arow.active::before{background:var(--bl);box-shadow:0 0 8px rgba(0,144,255,.5)}
+.ar-h{display:flex;align-items:center;gap:8px}
+.ar-ic{width:28px;height:28px;border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0}
+.ar-nm{font-family:var(--head);font-size:13px;font-weight:700;letter-spacing:.3px}
+.ar-id{font-family:var(--mono);font-size:8px;color:var(--tx3);letter-spacing:.5px}
+.ar-st{margin-left:auto;display:flex;align-items:center;gap:5px}
+.ar-dot{width:6px;height:6px;border-radius:50%}
+.ar-sl{font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:1px}
+.ar-pps{font-family:var(--mono);font-size:8px;color:var(--cy)}
+.ar-ms{display:grid;grid-template-columns:1fr 1fr 1fr;gap:2px;margin-top:7px}
+.arm{background:var(--ink1);border-radius:2px;padding:4px 5px;text-align:center}
+.arm-v{font-family:var(--mono);font-size:12px;font-weight:700;line-height:1}
+.arm-l{font-family:var(--mono);font-size:7px;color:var(--tx3);text-transform:uppercase;letter-spacing:.5px;margin-top:2px}
+.ar-btns{display:flex;gap:4px;margin-top:7px}
+.abtn{flex:1;padding:5px 0;border-radius:2px;border:1px solid;font-family:var(--head);font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer;transition:opacity .15s}
+.abtn:hover{opacity:.72}
+.abtn-g{background:var(--gn2);color:var(--gn);border-color:rgba(0,229,160,.2)}
+.abtn-b{background:var(--bl2);color:var(--bl);border-color:rgba(0,144,255,.2)}
+
+/* Logs */
+.lw{font-family:var(--mono)}
+.lr{display:flex;gap:7px;padding:5px 0;border-bottom:1px solid rgba(0,200,180,.05);align-items:baseline}
+.lt{font-size:9px;color:var(--tx3);flex-shrink:0;letter-spacing:.5px}
+.ls{font-size:9px;font-weight:700;flex-shrink:0;width:68px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:.5px}
+.lm{font-size:9px;color:var(--tx2);flex:1;line-height:1.4}
+.empty{padding:36px 0;text-align:center;font-family:var(--mono);font-size:10px;color:var(--tx3);letter-spacing:1px;white-space:pre-line}
+
+/* ─── FOOTER ─── */
+footer{height:30px;flex-shrink:0;background:var(--ink1);border-top:1px solid var(--wire);display:flex;align-items:center;padding:0 16px;gap:18px;position:relative;z-index:1;font-family:var(--mono);font-size:9px;color:var(--tx3);letter-spacing:.5px}
+.fl{display:flex;align-items:center;gap:5px}
+.fd{width:5px;height:5px;border-radius:50%}
+.fr{margin-left:auto;display:flex;gap:16px}
+.fv{color:var(--tx);font-weight:700}
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <div class="logo">[//]</div>
+  <div class="brand">
+    <div class="brand-t">Fleet OS · Agent Manager</div>
+    <div class="brand-s">LIVE TOPOLOGY &amp; PACKET TELEMETRY</div>
+  </div>
+  <div class="pill"><div class="pldot" id="db-dot" style="background:var(--tx3)"></div><span id="db-lbl">PostgreSQL</span></div>
+  <div class="pill"><div class="pldot" style="background:var(--bl)"></div><span>POLL / 3s</span></div>
+  <div class="glob">
+    <div class="gbadge" id="gbadge">
+      <div class="gdot" id="gdot" style="background:var(--am);box-shadow:0 0 10px var(--am)"></div>
+      <span class="gtxt" id="gtxt" style="color:var(--am)">SCANNING</span>
+    </div>
+    <div class="gclock" id="gclock">--:--:--</div>
+  </div>
+</div>
+
+<div class="layout">
+  <div class="czone">
+    <canvas id="cv"></canvas>
+    <div id="nl"></div>
+    <div class="ctag ctag-tl">FLEET OS v2.0 // LIVE TOPOLOGY</div>
+    <div class="ctag ctag-tr">
+      <div class="sc">
+        <div class="sr"><span class="sv" id="sp" style="color:var(--cy)">0</span><span class="sl">PKT/MIN</span></div>
+        <div class="sr"><span class="sv" id="so" style="color:var(--gn)">0</span><span class="sv" id="st" style="font-size:14px;color:var(--tx3)">/9</span><span class="sl">ONLINE</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="rp">
+    <div class="tabs">
+      <div class="tab on" data-t="agents"  onclick="switchTab('agents')">Agents</div>
+      <div class="tab"    data-t="events"  onclick="switchTab('events')">Events</div>
+      <div class="tab"    data-t="packets" onclick="switchTab('packets')">Packets</div>
+    </div>
+    <div class="ps">
+      <div id="t-agents"></div>
+      <div id="t-events"  style="display:none"></div>
+      <div id="t-packets" style="display:none"></div>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <div class="fl"><div class="fd" style="background:var(--gn)"></div>ONLINE</div>
+  <div class="fl"><div class="fd" style="background:var(--am)"></div>DEGRADED</div>
+  <div class="fl"><div class="fd" style="background:var(--rd)"></div>OFFLINE</div>
+  <span>·</span><span>ANIMATED DOTS = LIVE PACKET FLOW</span>
+  <div class="fr">
+    <div class="fl">UP <span class="fv" id="f-up">0s</span></div>
+    <div class="fl fv" id="f-ts"></div>
+  </div>
+</footer>
+
+<script>
+'use strict';
+
+const AGENTS=[
+  {id:'AGT-SIM',name:'Qt Simulator',  icon:'🚗',col:'#ffb020',lang:'Qt/C++',   connects:['AGT-001'],health:null,             tcp:null, desc:'Sends GPS telemetry via TCP :6001'},
+  {id:'AGT-001',name:'GPS Server',    icon:'📡',col:'#00e5a0',lang:'C++/libpq', connects:['AGT-DB'], health:'http://127.0.0.1:6002/health',tcp:6001,desc:'C++ — receives packets, writes direct to PG via libpq'},
+  {id:'AGT-003',name:'Web Panel',     icon:'🌐',col:'#0090ff',lang:'Node.js',   connects:['AGT-DB'], health:'http://127.0.0.1:8080/api/health',tcp:null,desc:'REST API + dashboard on :8080'},
+  {id:'AGT-012',name:'DevOps Agent',  icon:'🔩',col:'#a040ff',lang:'Python',    connects:['AGT-001','AGT-003'],health:'http://127.0.0.1:8099/health',tcp:null,desc:'Build / start / stop all agents'},
+  {id:'AGT-DRV',name:'Driver Agent',  icon:'👤',col:'#00d4cc',lang:'C++',       connects:['AGT-DB'], health:'http://127.0.0.1:9081/health',tcp:null,desc:'Driver Safety Score engine'},
+  {id:'AGT-RPT',name:'Report Agent',  icon:'📊',col:'#ff6030',lang:'Python',    connects:['AGT-DB','AGT-003'],health:'http://127.0.0.1:9086/health',tcp:null,desc:'Scheduled PDF/CSV reports'},
+  {id:'AGT-MNT',name:'Maintenance',   icon:'🔧',col:'#60d020',lang:'C++',       connects:['AGT-DB'], health:'http://127.0.0.1:9083/health',tcp:null,desc:'Maintenance alert engine'},
+  {id:'AGT-NOT',name:'Notification',  icon:'🔔',col:'#e030a0',lang:'C++',       connects:['AGT-003'],health:'http://127.0.0.1:9084/health',tcp:null,desc:'Push / SMS / email dispatcher'},
+  {id:'AGT-DB', name:'PostgreSQL',    icon:'🗄', col:'#00d4cc',lang:'PG 14+',   connects:[],         health:null,tcp:5432,isDb:true,desc:'Primary datastore'},
+];
+const POS={
+  'AGT-SIM':{x:.13,y:.27},'AGT-001':{x:.37,y:.27},'AGT-003':{x:.64,y:.27},
+  'AGT-012':{x:.50,y:.09},'AGT-DRV':{x:.22,y:.70},'AGT-RPT':{x:.78,y:.70},
+  'AGT-MNT':{x:.38,y:.83},'AGT-NOT':{x:.62,y:.83},'AGT-DB': {x:.50,y:.52},
+};
+
+const S={st:{},parts:[],evts:[],pkts:[],tab:'agents',sel:null,t0:Date.now(),pw:[]};
+
+const cv=document.getElementById('cv'),ctx=cv.getContext('2d'),nl=document.getElementById('nl');
+
+function rsz(){const z=cv.parentElement;cv.width=z.clientWidth;cv.height=z.clientHeight}
+function wpx(id){const p=POS[id]||{x:.5,y:.5};return{x:p.x*cv.width,y:p.y*cv.height}}
+
+// ── Render loop ──
+(function loop(){ctx.clearRect(0,0,cv.width,cv.height);drawEdges();tickParts();requestAnimationFrame(loop)})();
+
+function drawEdges(){
+  AGENTS.forEach(a=>{
+    const f=wpx(a.id),stA=S.st[a.id]||{};
+    a.connects.forEach(tid=>{
+      const t=wpx(tid),stB=S.st[tid]||{};
+      const alive=stA.online||stB.online,hot=(stA.pps||0)>0;
+      ctx.beginPath();ctx.moveTo(f.x,f.y);ctx.lineTo(t.x,t.y);
+      ctx.setLineDash(alive?[]:[4,8]);
+      ctx.lineWidth=hot?2:1;
+      ctx.strokeStyle=hot?'rgba(0,212,204,.42)':alive?'rgba(0,200,180,.09)':'rgba(0,200,180,.03)';
+      ctx.shadowColor=hot?'#00d4cc':'transparent';ctx.shadowBlur=hot?10:0;
+      ctx.stroke();ctx.setLineDash([]);ctx.shadowBlur=0;
+      if(alive){
+        const mx=(f.x+t.x)/2,my=(f.y+t.y)/2,ang=Math.atan2(t.y-f.y,t.x-f.x);
+        ctx.save();ctx.translate(mx,my);ctx.rotate(ang);
+        ctx.beginPath();ctx.moveTo(6,0);ctx.lineTo(-5,-3);ctx.lineTo(-5,3);ctx.closePath();
+        ctx.fillStyle=hot?'rgba(0,212,204,.65)':'rgba(0,200,180,.14)';ctx.fill();ctx.restore();
+      }
+    });
+  });
+}
+
+function spawnP(fid,tid,col,r){
+  const f=wpx(fid),t=wpx(tid),dx=t.x-f.x,dy=t.y-f.y;
+  S.parts.push({fx:f.x,fy:f.y,tx:t.x,ty:t.y,cx:(f.x+t.x)/2-dy*.18,cy:(f.y+t.y)/2+dx*.18,p:0,sp:.017+Math.random()*.013,col:col||'#00d4cc',r:r||3.5,trail:[]});
+}
+function bz(p,t){const u=1-t;return{x:u*u*p.fx+2*u*t*p.cx+t*t*p.tx,y:u*u*p.fy+2*u*t*p.cy+t*t*p.ty}}
+function ha(h,a){const r=parseInt(h.slice(1,3),16)||0,g=parseInt(h.slice(3,5),16)||200,b=parseInt(h.slice(5,7),16)||180;return`rgba(${r},${g},${b},${a})`}
+function tickParts(){
+  S.parts=S.parts.filter(p=>p.p<1);
+  for(const p of S.parts){
+    p.p=Math.min(1,p.p+p.sp);
+    const pos=bz(p,p.p);
+    p.trail.push({x:pos.x,y:pos.y});if(p.trail.length>14)p.trail.shift();
+    for(let i=1;i<p.trail.length;i++){
+      ctx.beginPath();ctx.moveTo(p.trail[i-1].x,p.trail[i-1].y);ctx.lineTo(p.trail[i].x,p.trail[i].y);
+      ctx.strokeStyle=ha(p.col,(i/p.trail.length)*.5);ctx.lineWidth=1.5;ctx.stroke();
+    }
+    ctx.beginPath();ctx.arc(pos.x,pos.y,p.r+2,0,Math.PI*2);ctx.fillStyle=ha(p.col,.14);ctx.fill();
+    ctx.beginPath();ctx.arc(pos.x,pos.y,p.r,0,Math.PI*2);
+    ctx.fillStyle=p.col;ctx.shadowColor=p.col;ctx.shadowBlur=16;ctx.fill();ctx.shadowBlur=0;
+  }
+}
+
+// ── Node Cards ──
+function renderNodes(){
+  nl.innerHTML='';
+  AGENTS.forEach(a=>{
+    const{x,y}=wpx(a.id),st=S.st[a.id]||{},online=st.online,d=st.data||{},pps=st.pps||0;
+    const dot=online?a.col:(st.lastSeen?'var(--am)':'var(--tx3)');
+    const lbl=online?'ONLINE':(st.lastSeen?'DEGD':'OFFLINE');
+    let meters='';
+    if(a.id==='AGT-001')meters=`<div class="nm">
+      <div class="nb"><div class="nbv" style="color:var(--cy)">${fn(d.packets||0)}</div><div class="nbl">recv</div></div>
+      <div class="nb"><div class="nbv" style="color:var(--gn)">${fn(d.written||0)}</div><div class="nbl">saved</div></div>
+      <div class="nb"><div class="nbv" style="color:${(d.errors||0)>0?'var(--rd)':'var(--tx3)'}">${d.errors||0}</div><div class="nbl">err</div></div>
+    </div>`;
+    else if(a.id==='AGT-DB')meters=`<div class="nm"><div class="nb" style="grid-column:1/-1"><div class="nbv" style="color:var(--cy)">${fn(d.gps_rows||0)}</div><div class="nbl">gps rows</div></div></div>`;
+    else if(a.id==='AGT-003'&&online)meters=`<div class="nm">
+      <div class="nb"><div class="nbv" style="color:var(--bl)">:8080</div><div class="nbl">port</div></div>
+      <div class="nb"><div class="nbv" style="color:var(--gn)">OK</div><div class="nbl">api</div></div>
+      <div class="nb"><div class="nbv" style="color:var(--gn)">✓</div><div class="nbl">auth</div></div>
+    </div>`;
+    const el=document.createElement('div');
+    el.className='nd'+(S.sel===a.id?' sel':'');
+    el.style.cssText=`left:${x}px;top:${y}px`;
+    el.innerHTML=`<div class="nc ${online?'on':'off'}${a.isDb?' db':''}">
+      <div class="nc-bar" style="background:${dot};box-shadow:0 0 8px ${dot}"></div>
+      <div class="nt"><div class="ni">${a.icon}</div><div><div class="nn">${a.name}</div><div class="nid">${a.id} · ${a.lang}</div></div></div>
+      <div class="ns"><div class="nsd" style="background:${dot};box-shadow:0 0 7px ${dot}"></div><span class="nsl" style="color:${dot}">${lbl}</span>${pps>0?`<span class="npps">${pps}/s</span>`:''}</div>
+      ${meters}
+    </div>`;
+    el.addEventListener('click',()=>{S.sel=S.sel===a.id?null:a.id;renderNodes();renderPanel()});
+    nl.appendChild(el);
+  });
+}
+
+// ── Polling — /api/agents on web panel ──
+async function pollAll(){
+  let results=[];
+  try{
+    const r=await fetch('/api/agents',{cache:'no-store',signal:AbortSignal.timeout(4500)});
+    if(!r.ok)throw 0;
+    results=await r.json();
+  }catch{
+    results=await Promise.all(AGENTS.filter(a=>a.health).map(a=>
+      fetch(a.health,{cache:'no-store',signal:AbortSignal.timeout(1400)})
+        .then(r=>r.json().then(d=>({id:a.id,online:r.ok,data:d})))
+        .catch(()=>({id:a.id,online:false,data:{}}))
+    ));
+  }
+  for(const{id,online,data}of results){
+    const prev=S.st[id]||{};
+    const curN=(data.written||0)+(data.packets||0)+(data.gps_rows||0);
+    const pps=Math.max(0,Math.round((curN-(prev.prevN||0))/3));
+    if(!prev.online&&online) addEvt(id,'came ONLINE','gn');
+    if(prev.online&&!online) addEvt(id,'went OFFLINE','rd');
+    S.st[id]={online,data,pps,prevN:curN,prevW:prev.prevW||0,lastSeen:online?ts():prev.lastSeen};
+    if(pps>0){
+      S.pw.push(Date.now());
+      const a=AGENTS.find(x=>x.id===id);
+      a?.connects.forEach(t=>{if(Math.random()<.65)spawnP(id,t,a.col)});
+    }
+    if(id==='AGT-001'){
+      const w=data.written||0,pw2=S.st[id].prevW||0;
+      if(w>pw2&&pw2>0){const δ=w-pw2;addPkt('AGT-001','AGT-DB',`${δ} position${δ>1?'s':''} committed`);for(let i=0;i<Math.min(δ,5);i++)spawnP('AGT-001','AGT-DB','#00e5a0',4.5)}
+      S.st[id].prevW=w;
+    }
+  }
+  // Infer simulator
+  const gst=S.st['AGT-001']||{},pSim=S.st['AGT-SIM']||{};
+  const simOn=gst.online&&(gst.pps||0)>0;
+  if(!pSim.online&&simOn)addEvt('AGT-SIM','Simulator activity detected','am');
+  S.st['AGT-SIM']={online:simOn,data:{},pps:0,prevN:0,prevW:0,lastSeen:simOn?ts():pSim.lastSeen};
+  if(simOn&&Math.random()<.6){spawnP('AGT-SIM','AGT-001','#ffb020',3.5);addPkt('AGT-SIM','AGT-001','GPS telemetry packet')}
+  const cut=Date.now()-60000;S.pw=S.pw.filter(t=>t>cut);
+  updateBar();renderNodes();renderPanel();
+}
+
+// ── Header ──
+function updateBar(){
+  const mon=AGENTS.filter(a=>a.health||a.isDb);
+  const onN=AGENTS.filter(a=>(S.st[a.id]||{}).online).length;
+  const monOnN=mon.filter(a=>(S.st[a.id]||{}).online).length;
+  document.getElementById('sp').textContent=S.pw.length;
+  document.getElementById('so').textContent=onN;
+  document.getElementById('st').textContent='/'+AGENTS.length;
+  const dbSt=S.st['AGT-DB']||{};
+  document.getElementById('db-dot').style.background=dbSt.online?'var(--gn)':'var(--tx3)';
+  document.getElementById('db-lbl').textContent='PostgreSQL'+(dbSt.online?' ✓':'');
+  const gdot=document.getElementById('gdot'),gtxt=document.getElementById('gtxt');
+  if(onN===0){setG(gdot,gtxt,'var(--rd)','ALL OFFLINE')}
+  else if(monOnN<mon.length){setG(gdot,gtxt,'var(--am)',`${onN} / ${AGENTS.length} ONLINE`)}
+  else{setG(gdot,gtxt,'var(--gn)','NOMINAL');gdot.style.animation='none'}
+  const now=ts();
+  document.getElementById('gclock').textContent=now;document.getElementById('f-ts').textContent=now;
+  const s=Math.round((Date.now()-S.t0)/1000);
+  document.getElementById('f-up').textContent=s<60?s+'s':s<3600?~~(s/60)+'m '+(s%60)+'s':~~(s/3600)+'h '+~~(s%3600/60)+'m';
+}
+function setG(dot,txt,c,msg){
+  dot.style.cssText=`width:8px;height:8px;border-radius:50%;background:${c};box-shadow:0 0 12px ${c};animation:blink 2s infinite`;
+  txt.textContent=msg;txt.style.color=c;
+}
+
+// ── Panel ──
+function renderPanel(){
+  if(S.tab==='agents')renderAgents();
+  else if(S.tab==='events')renderEvts();
+  else renderPkts();
+}
+function renderAgents(){
+  document.getElementById('t-agents').innerHTML=AGENTS.map(a=>{
+    const st=S.st[a.id]||{},online=st.online,d=st.data||{},pps=st.pps||0;
+    const dot=online?a.col:(st.lastSeen?'var(--am)':'var(--tx3)');
+    const lbl=online?'ONLINE':(st.lastSeen?'DEGD':'OFFLINE');
+    let ms='';
+    if(a.id==='AGT-001')ms=`<div class="ar-ms">
+      <div class="arm"><div class="arm-v" style="color:var(--cy)">${fn(d.packets||0)}</div><div class="arm-l">Recv</div></div>
+      <div class="arm"><div class="arm-v" style="color:var(--gn)">${fn(d.written||0)}</div><div class="arm-l">Saved</div></div>
+      <div class="arm"><div class="arm-v" style="color:${(d.errors||0)>0?'var(--rd)':'var(--tx3)'}">${d.errors||0}</div><div class="arm-l">Err</div></div>
+    </div>`;
+    else if(a.id==='AGT-DB')ms=`<div class="ar-ms"><div class="arm" style="grid-column:1/-1"><div class="arm-v" style="color:var(--cy)">${fn(d.gps_rows||0)}</div><div class="arm-l">GPS rows in DB</div></div></div>`;
+    else if(a.id==='AGT-003'&&online)ms=`<div class="ar-ms">
+      <div class="arm"><div class="arm-v" style="color:var(--bl)">8080</div><div class="arm-l">Port</div></div>
+      <div class="arm"><div class="arm-v" style="color:var(--gn)">REST</div><div class="arm-l">API</div></div>
+      <div class="arm"><div class="arm-v" style="color:var(--gn)">✓</div><div class="arm-l">Auth</div></div>
+    </div>`;
+    const btns=a.health
+      ?`<div class="ar-btns"><button class="abtn abtn-g" onclick="window.open('${a.health}','_blank')">↗ HEALTH</button><button class="abtn abtn-b" onclick="doPing('${a.id}')">⟳ PING</button></div>`
+      :a.tcp?`<div class="ar-btns"><button class="abtn abtn-b">TCP :${a.tcp}</button></div>`:'';
+    return`<div class="arow${S.sel===a.id?' active':''}" onclick="S.sel=S.sel==='${a.id}'?null:'${a.id}';renderNodes();renderPanel()">
+      <div class="ar-h">
+        <div class="ar-ic" style="background:${a.col}1a">${a.icon}</div>
+        <div><div class="ar-nm">${a.name}</div><div class="ar-id">${a.id} · ${a.lang}</div></div>
+        <div class="ar-st">${pps>0?`<span class="ar-pps">${pps}/s&nbsp;</span>`:''}<div class="ar-dot" style="background:${dot};box-shadow:0 0 6px ${dot}"></div><span class="ar-sl" style="color:${dot}">${lbl}</span></div>
+      </div>${ms}${btns}
+    </div>`;
+  }).join('');
+}
+function renderEvts(){
+  const el=document.getElementById('t-events');
+  if(!S.evts.length){el.innerHTML='<div class="empty">// NO EVENTS YET</div>';return}
+  el.innerHTML='<div class="lw">'+[...S.evts].reverse().slice(0,150).map(e=>
+    `<div class="lr"><span class="lt">${e.t}</span><span class="ls" style="color:${e.c}">${e.id}</span><span class="lm">${e.msg}</span></div>`
+  ).join('')+'</div>';
+}
+function renderPkts(){
+  const el=document.getElementById('t-packets');
+  if(!S.pkts.length){el.innerHTML='<div class="empty">// NO PACKETS YET\n// START SIMULATOR</div>';return}
+  el.innerHTML='<div class="lw">'+[...S.pkts].reverse().slice(0,150).map(p=>
+    `<div class="lr"><span class="lt">${p.t}</span><span class="ls" style="color:var(--cy)">${p.f}→${p.to}</span><span class="lm">${p.m}</span></div>`
+  ).join('')+'</div>';
+}
+
+// ── Ambient particles ──
+setInterval(()=>{
+  const links=[['AGT-SIM','AGT-001','#ffb020'],['AGT-001','AGT-DB','#00e5a0'],['AGT-003','AGT-DB','#0090ff'],['AGT-012','AGT-001','#a040ff'],['AGT-RPT','AGT-DB','#ff6030']];
+  const active=links.filter(([f,t])=>(S.st[f]||{}).online||(S.st[t]||{}).online);
+  if(active.length&&Math.random()<.3){const[f,t,c]=active[~~(Math.random()*active.length)];spawnP(f,t,c,2.5)}
+},750);
+
+// ── Helpers ──
+function ts(){return new Date().toTimeString().slice(0,8)}
+function fn(n){return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1000?(n/1000).toFixed(1)+'k':String(n)}
+function addEvt(id,msg,ck){const C={gn:'var(--gn)',rd:'var(--rd)',am:'var(--am)',bl:'var(--bl)',cy:'var(--cy)'};S.evts.push({t:ts(),id,msg,c:C[ck]||'var(--tx2)'});if(S.evts.length>400)S.evts.shift()}
+function addPkt(f,to,m){S.pkts.push({t:ts(),f,to,m});if(S.pkts.length>400)S.pkts.shift()}
+function switchTab(tab){
+  S.tab=tab;
+  document.querySelectorAll('.tab').forEach(el=>el.classList.toggle('on',el.dataset.t===tab));
+  ['agents','events','packets'].forEach(n=>document.getElementById('t-'+n).style.display=n===tab?'':'none');
+  renderPanel();
+}
+function doPing(id){const a=AGENTS.find(x=>x.id===id);if(!a)return;a.connects.forEach(t=>spawnP(id,t,a.col,5));addEvt(id,'manual ping sent','cy');if(S.tab==='events')renderEvts()}
+
+// ── Init ──
+window.addEventListener('resize',()=>rsz());
+rsz();
+addEvt('SYSTEM','Agent Manager online','bl');
+addEvt('SYSTEM','Polling /api/agents every 3s…','cy');
+pollAll();
+setInterval(pollAll,3000);
+</script>
+</body>
+</html>

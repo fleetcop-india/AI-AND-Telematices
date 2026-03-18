@@ -1,0 +1,18 @@
+[ 25%] Building CXX object CMakeFiles/industry-agent.dir/agents/industry-agent/main.cpp.o
+[ 25%] Building CXX object CMakeFiles/gps-server.dir/agents/gps-server/main.cpp.o
+[ 25%] Building CXX object CMakeFiles/driver-agent.dir/agents/driver-agent/main.cpp.o
+[ 33%] Building CXX object CMakeFiles/notification-agent.dir/agents/notification-agent/main.cpp.o
+[ 50%] Building CXX object CMakeFiles/maintenance-agent.dir/agents/maintenance-agent/main.cpp.o
+[ 50%] Building CXX object CMakeFiles/route-agent.dir/agents/route-agent/main.cpp.o
+[ 58%] Linking CXX executable /home/harish/Baseline-releases/Release-Version-1/fleetos_v2_release1/fleetos_complete/bin/gps-server
+[ 58%] Built target gps-server
+[ 66%] Linking CXX executable /home/harish/Baseline-releases/Release-Version-1/fleetos_v2_release1/fleetos_complete/bin/notification-agent
+[ 66%] Built target notification-agent
+[ 75%] Linking CXX executable /home/harish/Baseline-releases/Release-Version-1/fleetos_v2_release1/fleetos_complete/bin/industry-agent
+[ 75%] Built target industry-agent
+[ 83%] Linking CXX executable /home/harish/Baseline-releases/Release-Version-1/fleetos_v2_release1/fleetos_complete/bin/driver-agent
+[ 83%] Built target driver-agent
+[ 91%] Linking CXX executable /home/harish/Baseline-releases/Release-Version-1/fleetos_v2_release1/fleetos_complete/bin/route-agent
+[ 91%] Built target route-agent
+[100%] Linking CXX executable /home/harish/Baseline-releases/Release-Version-1/fleetos_v2_release1/fleetos_complete/bin/maintenance-agent
+[100%] Built target maintenance-agent

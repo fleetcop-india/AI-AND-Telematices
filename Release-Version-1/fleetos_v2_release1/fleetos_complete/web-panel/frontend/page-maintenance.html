@@ -1,0 +1,127 @@
+<!-- Fleet OS v2.0 — page-maintenance.html -->
+<!-- Edit this file freely. Loaded dynamically by index.html. -->
+<!-- To reload: clear browser cache or add ?v=2 to URL -->
+
+<div class="page" id="page-maintenance">
+<div class="page-title">Maintenance</div>
+  <div class="page-sub">Real-time service tasks — odometer, engine hours &amp; date triggers</div>
+  <div class="stats-grid sg4" id="maint-stats"></div>
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">🔧 Maintenance Tasks</span>
+      <div class="card-actions" style="gap:6px">
+        <button class="btn btn-secondary btn-sm" onclick="downloadMaintTemplate()">⬇ Template</button>
+        <label class="btn btn-secondary btn-sm" style="cursor:pointer;margin:0">📤 Import<input type="file" accept=".xlsx,.csv" style="display:none" onchange="bulkImportMaint(this)"></label>
+        <button class="btn btn-primary btn-sm" onclick="openAddMaintModal()">+ Add Task</button>
+      </div>
+    </div>
+    <div class="tbl-scroll">
+      <table><thead><tr><th>Vehicle</th><th>Task</th><th>Type</th><th>Due Odometer</th><th>Due Hours</th><th>Due Days</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody id="maintTable"></tbody></table>
+    </div>
+  </div>
+</div>
+</div>
+
+<script type="text/fleetmodule" data-page="maintenance">
+async function renderMaint(){
+  const tb = document.getElementById('maintTable'); if(!tb) return;
+  tb.innerHTML = loadingRow(8);
+  try {
+    MAINT = await apiGet('/maintenance') || []; if(!Array.isArray(MAINT)){MAINT=[];}
+    const total=MAINT.length, overdue=MAINT.filter(m=>m.computed_status==='overdue').length;
+    const dueSoon=MAINT.filter(m=>m.computed_status==='due_soon').length, done=MAINT.filter(m=>m.status==='done').length;
+    const sm=document.getElementById('maint-stats');
+    if(sm) sm.innerHTML=`
+      <div class="stat-card"><div class="stat-top"><div class="stat-ico" style="background:var(--primary-light)">📋</div></div><div class="stat-val">${total}</div><div class="stat-lbl">Total Tasks</div><div class="stat-bar" style="background:var(--primary)"></div></div>
+      <div class="stat-card"><div class="stat-top"><div class="stat-ico" style="background:var(--red-bg)">🚨</div></div><div class="stat-val" style="color:var(--red)">${overdue}</div><div class="stat-lbl">Overdue</div><div class="stat-bar" style="background:var(--red)"></div></div>
+      <div class="stat-card"><div class="stat-top"><div class="stat-ico" style="background:var(--amber-bg)">⚠️</div></div><div class="stat-val" style="color:var(--amber)">${dueSoon}</div><div class="stat-lbl">Due Soon</div><div class="stat-bar" style="background:var(--amber)"></div></div>
+      <div class="stat-card"><div class="stat-top"><div class="stat-ico" style="background:var(--green-bg)">✅</div></div><div class="stat-val" style="color:var(--green)">${done}</div><div class="stat-lbl">Completed</div><div class="stat-bar" style="background:var(--green)"></div></div>`;
+    const sbct=document.getElementById('sb-maint-ct');
+    if(sbct){sbct.textContent=overdue+dueSoon;sbct.style.display=(overdue+dueSoon)>0?'':'none';}
+    if(!MAINT.length){tb.innerHTML=emptyRow(8,'No maintenance tasks yet — click + Add Task');return;}
+    const stMap={overdue:'badge-red',due_soon:'badge-amber',ok:'badge-green',done:'badge-blue',pending:'badge-gray'};
+    tb.innerHTML=MAINT.map(m=>{
+      const cs=m.status==='done'?'done':(m.computed_status||m.status||'ok');
+      return `<tr>
+        <td style="font-weight:600">${m.device_name||m.imei}</td>
+        <td>${m.title}</td>
+        <td><span class="badge badge-gray" style="text-transform:capitalize">${(m.task_type||'').replace('_',' ')}</span></td>
+        <td class="mono" style="font-size:12px">${m.due_odometer?m.due_odometer.toLocaleString()+' km':'—'}</td>
+        <td class="mono" style="font-size:12px">${m.due_engine_hours?m.due_engine_hours+' h':'—'}</td>
+        <td class="mono" style="font-size:12px">${m.due_days?m.due_days+' days':'—'}</td>
+        <td><span class="badge ${stMap[cs]||'badge-gray'}">${cs.replace('_',' ')}</span></td>
+        <td>
+          ${m.status!=='done'?`<button class="btn btn-icon" title="Mark Done" onclick="markMaintDone('${m.id}')">✅</button>`:''}
+          <button class="btn btn-icon" title="Delete" onclick="deleteMaintTask('${m.id}')" style="color:var(--red)">🗑</button>
+        </td>
+      </tr>`;
+    }).join('');
+  } catch(e){tb.innerHTML=emptyRow(8,'Error: '+e.message);}
+}
+
+function openAddMaintModal(){
+  document.getElementById('maint-edit-id').value='';
+  document.getElementById('maint-modal-title').textContent='Add Maintenance Task';
+  ['maint-title','maint-odo','maint-hrs','maint-days','maint-notes'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});
+  const sel=document.getElementById('maint-dev-sel'); if(sel){sel.innerHTML='';
+    (_mapDevs||[]).forEach(d=>sel.add(new Option(d.name+' ('+d.imei+')',d.imei)));
+    if(!sel.options.length) apiGet('/devices').then(devs=>{(devs||[]).forEach(d=>sel.add(new Option(d.name+' ('+d.imei+')',d.imei)));});
+  }
+  const sd=document.getElementById('maint-start'); if(sd) sd.value=new Date().toISOString().slice(0,10);
+  openModal('addMaintModal');
+}
+
+async function saveMaintTask(){
+  const id=document.getElementById('maint-edit-id').value;
+  const body={imei:document.getElementById('maint-dev-sel').value,
+    task_type:document.getElementById('maint-task-type').value,
+    title:document.getElementById('maint-title').value.trim(),
+    due_odometer:parseFloat(document.getElementById('maint-odo').value)||null,
+    due_engine_hours:parseFloat(document.getElementById('maint-hrs').value)||null,
+    due_days:parseInt(document.getElementById('maint-days').value)||null,
+    start_date:document.getElementById('maint-start').value||null,
+    notes:document.getElementById('maint-notes').value.trim()||null};
+  if(!body.imei||!body.title){toast('IMEI and title required','error');return;}
+  try{
+    if(id) await apiPut('/maintenance/'+id,body); else await apiPost('/maintenance',body);
+    toast('Task saved','success','🔧'); closeModal('addMaintModal'); renderMaint();
+  }catch(e){toast('Error: '+e.message,'error');}
+}
+
+async function markMaintDone(id){
+  try{await apiPut('/maintenance/'+id,{status:'done'});toast('Marked done','success','✅');renderMaint();}
+  catch(e){toast('Error: '+e.message,'error');}
+}
+
+async function deleteMaintTask(id){
+  confirmAction('Delete Task','This task will be permanently deleted.','🗑️',async()=>{
+    try{await apiDel('/maintenance/'+id);toast('Deleted','success');renderMaint();}
+    catch(e){toast('Error: '+e.message,'error');}
+  });
+}
+
+function downloadMaintTemplate(){
+  const csv='imei,task_type,title,due_odometer,due_engine_hours,due_days\n352312097033263,oil_change,50k Oil Change,50000,,\n352312097033263,service,Full Service,,500,90\n';
+  const a=document.createElement('a');a.href='data:text/csv,'+encodeURIComponent(csv);a.download='maintenance_template.csv';a.click();
+}
+
+async function bulkImportMaint(input){
+  const file=input.files[0];if(!file)return;
+  const text=await file.text();
+  const lines=text.split('\n').filter(l=>l.trim());
+  const headers=lines[0].split(',').map(h=>h.trim().replace(/"/g,''));
+  const rows=lines.slice(1).map(line=>{
+    const vals=line.split(',').map(v=>v.trim().replace(/"/g,''));
+    const obj={};headers.forEach((h,i)=>{if(vals[i]) obj[h]=vals[i];});return obj;
+  }).filter(r=>r.imei&&r.title);
+  if(!rows.length){toast('No valid rows found','error');return;}
+  try{
+    const res=await apiPost('/bulk/maintenance',{rows});
+    toast(`Imported ${res.inserted||0} tasks`+(res.errors?.length?' ('+res.errors.length+' errors)':''),'success','📤');
+    renderMaint();
+  }catch(e){toast('Import failed: '+e.message,'error');}
+  input.value='';
+}
+
+</script>

@@ -1,0 +1,16 @@
+
+  ╔══════════════════════════════════════════════╗
+  ║  Fleet OS GPS Server (C++) — AGT-001         ║
+  ╚══════════════════════════════════════════════╝
+  TCP  → 0.0.0.0:6001
+  Mgmt → http://localhost:6002
+  DB   → fleetos@127.0.0.1:5432/fleetos
+
+[PG] TCP 127.0.0.1:5432
+  ✅ DB connected — gps_positions has 45547 rows
+  ✅ DB write test PASSED
+
+  ✅ Listening for GPS packets on TCP :6001
+
+[+] 127.0.0.1:49352
+[-] 127.0.0.1:49352 imei=

@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "/home/harish/Baseline-releases/Release-Version-1/fleetos_v2_release1/fleetos_complete/agents/report-agent/report_agent.py", line 9, in <module>
+    from kafka import KafkaConsumer
+ModuleNotFoundError: No module named 'kafka'

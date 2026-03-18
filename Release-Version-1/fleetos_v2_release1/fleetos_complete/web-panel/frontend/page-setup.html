@@ -1,0 +1,43 @@
+<!-- Fleet OS v2.0 — page-setup.html -->
+<!-- Edit this file freely. Loaded dynamically by index.html. -->
+<!-- To reload: clear browser cache or add ?v=2 to URL -->
+
+<div class="page" id="page-setup">
+<div class="page-title">Setup &amp; Configuration</div>
+  <div class="page-sub">System settings, access roles and integrations</div>
+  <div class="stats-grid sg3">
+    <div class="card" style="margin-bottom:0"><div class="card-header"><span class="card-title">⚙️ Server</span></div><div class="mbody">
+      <div class="frow"><div class="fg"><label class="flabel">GPS Server Host</label><input class="finput" value="127.0.0.1" id="cfg-host"></div></div>
+      <div class="frow"><div class="fg"><label class="flabel">GPS Port</label><input class="finput" value="8080" id="cfg-port"></div><div class="fg"><label class="flabel">Kafka Brokers</label><input class="finput" value="127.0.0.1:9092" id="cfg-kafka"></div></div>
+      <div class="frow"><div class="fg"><label class="flabel">PostgreSQL DSN</label><input class="finput" value="postgresql://fleetos:fleetos123@127.0.0.1:5432/fleetos" id="cfg-pg"></div></div>
+      <button class="btn btn-primary btn-sm" onclick="toast('Config saved','success','⚙️')">Save Config</button>
+    </div></div>
+    <div class="card" style="margin-bottom:0"><div class="card-header"><span class="card-title">🔑 API Keys</span></div><div class="mbody">
+      <div class="frow"><div class="fg"><label class="flabel">Geocoder Provider</label><select class="fselect"><option>OpenStreetMap (free)</option><option>Google Maps</option><option>MapBox</option><option>OpenCage</option></select></div></div>
+      <div class="frow"><div class="fg"><label class="flabel">Geocoder API Key</label><input class="finput" type="password" placeholder="blank = OSM"></div></div>
+      <div class="frow"><div class="fg"><label class="flabel">Firebase Project ID</label><input class="finput" placeholder="your-project-id"></div></div>
+      <div class="frow"><div class="fg"><label class="flabel">SMS API Key (MSG91)</label><input class="finput" type="password" placeholder="••••••••"></div></div>
+      <button class="btn btn-primary btn-sm" onclick="toast('Keys saved','success','🔑')">Save Keys</button>
+    </div></div>
+    <div class="card" style="margin-bottom:0"><div class="card-header"><span class="card-title">🛡️ Access Roles</span></div>
+      <div class="timeline">
+        <div class="tl-item"><div class="tl-ico" style="background:var(--red-bg)">👑</div><div class="tl-content"><div class="tl-title">Admin</div><div class="tl-sub">Full access — all panels, users, system config, logs</div></div><span class="badge badge-red">Full</span></div>
+        <div class="tl-item"><div class="tl-ico" style="background:var(--amber-bg)">📊</div><div class="tl-content"><div class="tl-title">Manager</div><div class="tl-sub">All devices, ack alarms, reports, notifications</div></div><span class="badge badge-amber">Ops</span></div>
+        <div class="tl-item"><div class="tl-ico" style="background:var(--orange-bg)">🏪</div><div class="tl-content"><div class="tl-title">Dealer</div><div class="tl-sub">Sub-accounts and own client devices</div></div><span class="badge badge-orange">Dealer</span></div>
+        <div class="tl-item"><div class="tl-ico" style="background:var(--violet-bg)">🎛️</div><div class="tl-content"><div class="tl-title">Operator</div><div class="tl-sub">Assigned devices only, can send commands</div></div><span class="badge badge-violet">Ops</span></div>
+        <div class="tl-item"><div class="tl-ico" style="background:var(--primary-light)">👤</div><div class="tl-content"><div class="tl-title">User</div><div class="tl-sub">Own devices only, read access</div></div><span class="badge badge-blue">Read</span></div>
+        <div class="tl-item"><div class="tl-ico" style="background:var(--green-bg)">👁️</div><div class="tl-content"><div class="tl-title">Demo</div><div class="tl-sub">Read-only, sample data only</div></div><span class="badge badge-green">Demo</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<script type="text/fleetmodule" data-page="setup">
+function saveFirebaseConfig(){
+  toast('Firebase config saved','success','🔥');
+  const el=document.getElementById('notif-firebase-status');if(el)el.textContent='Configured ✅';
+  closeModal('firebaseModal');
+}
+
+</script>

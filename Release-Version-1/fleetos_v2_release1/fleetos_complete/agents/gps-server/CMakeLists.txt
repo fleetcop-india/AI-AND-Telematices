@@ -1,0 +1,11 @@
+# GPS Server — standalone CMakeLists (used when building gps-server alone)
+cmake_minimum_required(VERSION 3.10)
+project(gps-server CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+add_executable(gps-server main.cpp)
+target_link_libraries(gps-server PRIVATE pthread)
+target_compile_options(gps-server PRIVATE -O2)
+install(TARGETS gps-server RUNTIME DESTINATION bin)
+message(STATUS "  → GPS Server: zero external deps (PG wire-protocol, inline MD5)")

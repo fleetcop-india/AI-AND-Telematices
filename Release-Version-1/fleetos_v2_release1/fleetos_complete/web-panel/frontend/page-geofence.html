@@ -1,0 +1,173 @@
+<!-- Fleet OS v2.0 — page-geofence.html -->
+<!-- Edit this file freely. Loaded dynamically by index.html. -->
+<!-- To reload: clear browser cache or add ?v=2 to URL -->
+
+<div class="page" id="page-geofence">
+<div class="page-title">Geo-fences</div>
+  <div class="page-sub">Create polygon &amp; circle zones — entry/exit alerts per vehicle</div>
+  <div class="stats-grid sg2" style="height:calc(100vh - 160px);min-height:500px">
+    <!-- Left: fence list -->
+    <div class="card" style="margin-bottom:0;display:flex;flex-direction:column;overflow:hidden">
+      <div class="card-header">
+        <span class="card-title">Fence List</span>
+        <div class="card-actions">
+          <button class="btn btn-secondary btn-sm" onclick="gfDrawMode('polygon')">✏️ Polygon</button>
+          <button class="btn btn-secondary btn-sm" onclick="gfDrawMode('circle')">⭕ Circle</button>
+        </div>
+      </div>
+      <div style="padding:10px;border-bottom:1px solid var(--border)">
+        <div id="gf-draw-hint" style="font-size:12px;color:var(--muted);padding:6px 10px;background:#f8fafc;border-radius:6px">Select ✏️ Polygon or ⭕ Circle above then draw on the map →</div>
+      </div>
+      <div style="flex:1;overflow-y:auto" id="gf-list"></div>
+    </div>
+    <!-- Right: map -->
+    <div class="card" style="margin-bottom:0;padding:0;overflow:hidden;position:relative">
+      <div id="gf-map" style="width:100%;height:100%;min-height:400px"></div>
+    </div>
+  </div>
+</div>
+</div>
+
+<script type="text/fleetmodule" data-page="geofence">
+// ── geofence state ─────────────────────────────────────────
+let _gfMap=null,_gfLayer=null,_gfFences=[],_gfPendingCoords=null,_gfPendingShape='polygon';
+
+async function renderGeofence(){
+  if(!_gfMap) _initGfMap();
+  await loadGeofences();
+}
+
+function _initGfMap(){
+  if(_gfMap) return;
+  _gfMap=L.map('gf-map').setView([12.9716,77.5946],12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(_gfMap);
+  _gfLayer=L.featureGroup().addTo(_gfMap);
+}
+
+async function loadGeofences(){
+  try{
+    _gfFences=await apiGet('/geofences')||[];
+    if(_gfLayer) _gfLayer.clearLayers();
+    _gfFences.forEach(f=>drawFenceOnMap(f));
+    const listEl=document.getElementById('gf-list');if(!listEl) return;
+    if(!_gfFences.length){listEl.innerHTML='<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px">No fences yet. Draw one on the map →</div>';return;}
+    listEl.innerHTML=_gfFences.map(f=>{
+      const imeis=JSON.parse(typeof f.assigned_imeis==='string'?f.assigned_imeis:'[]');
+      return `<div style="padding:10px 14px;border-bottom:1px solid #f1f5f9;cursor:pointer" onclick="focusFence('${f.id}')">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+          <span style="width:10px;height:10px;border-radius:50%;background:${f.color||'#3b82f6'};display:inline-block;flex-shrink:0"></span>
+          <span style="font-weight:600;font-size:13px">${f.name}</span>
+          <span class="badge badge-blue" style="font-size:10px;margin-left:auto">${f.shape}</span>
+        </div>
+        <div style="font-size:11px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap">
+          <span>🚗 ${imeis.length} vehicles</span>
+          ${f.alert_entry?'<span>📥 Entry</span>':''}${f.alert_exit?'<span>📤 Exit</span>':''}
+          <span>${f.is_active?'🟢 Active':'🔴 Inactive'}</span>
+        </div>
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <button class="btn btn-secondary btn-sm" style="font-size:10px;padding:2px 8px" onclick="editGf(event,'${f.id}')">Edit</button>
+          <button class="btn btn-danger btn-sm" style="font-size:10px;padding:2px 8px" onclick="deleteGf(event,'${f.id}')">Delete</button>
+        </div>
+      </div>`;
+    }).join('');
+  }catch(e){console.warn('[geofence]',e.message);}
+}
+
+function drawFenceOnMap(f){
+  if(!_gfMap||!_gfLayer) return;
+  try{
+    const coords=typeof f.coordinates==='string'?JSON.parse(f.coordinates):f.coordinates;
+    const style={color:f.color||'#3b82f6',fillOpacity:0.15,weight:2};
+    if(f.shape==='circle'&&coords.lat) L.circle([coords.lat,coords.lng],{radius:coords.radius_m||500,...style}).bindTooltip(f.name).addTo(_gfLayer);
+    else if(Array.isArray(coords)&&coords.length>0) L.polygon(coords,style).bindTooltip(f.name).addTo(_gfLayer);
+  }catch{}
+}
+
+function gfDrawMode(shape){
+  if(!_gfMap){_initGfMap();setTimeout(()=>gfDrawMode(shape),300);return;}
+  _gfPendingShape=shape;_gfPendingCoords=null;
+  const hint=document.getElementById('gf-draw-hint');
+  if(shape==='polygon'){
+    if(hint)hint.textContent='Click map to add polygon points. Double-click to finish.';
+    const pts=[];let poly=null;
+    _gfMap.off('click');_gfMap.off('dblclick');
+    _gfMap.on('click',function(e){
+      pts.push([e.latlng.lat,e.latlng.lng]);
+      if(poly)_gfMap.removeLayer(poly);
+      if(pts.length>1) poly=L.polygon(pts,{color:'#3b82f6',fillOpacity:.15}).addTo(_gfMap);
+    });
+    _gfMap.on('dblclick',function(){
+      _gfMap.off('click');_gfMap.off('dblclick');
+      if(pts.length<3){toast('Need at least 3 points','error');return;}
+      _gfPendingCoords=pts;if(poly)_gfLayer.addLayer(poly);openGfModal();
+    });
+  } else {
+    if(hint)hint.textContent='Click map center for circle zone.';
+    _gfMap.off('click');_gfMap.off('dblclick');
+    _gfMap.once('click',function(e){
+      _gfPendingCoords={lat:e.latlng.lat,lng:e.latlng.lng,radius_m:500};
+      L.circle([e.latlng.lat,e.latlng.lng],{radius:500,color:'#3b82f6',fillOpacity:.15}).addTo(_gfLayer);
+      openGfModal();
+    });
+  }
+}
+
+function openGfModal(fence){
+  document.getElementById('gfm-id').value=fence?fence.id:'';
+  document.getElementById('gfm-title').textContent=fence?'Edit Fence':'New Geo-fence';
+  document.getElementById('gfm-name').value=fence?fence.name:'';
+  document.getElementById('gfm-color').value=fence?fence.color:'#3B82F6';
+  document.getElementById('gfm-entry').value=fence?(fence.alert_entry?'true':'false'):'true';
+  document.getElementById('gfm-exit').value=fence?(fence.alert_exit?'true':'false'):'true';
+  const vc=document.getElementById('gfm-vehicle-checks');vc.innerHTML='';
+  const assigned=fence?JSON.parse(typeof fence.assigned_imeis==='string'?fence.assigned_imeis:'[]'):[];
+  (_mapDevs||[]).forEach(d=>{
+    const chk=document.createElement('label');
+    chk.style.cssText='display:flex;align-items:center;gap:4px;font-size:12px;padding:3px 6px;border:1px solid #e2e8f0;border-radius:6px;cursor:pointer';
+    chk.innerHTML=`<input type="checkbox" value="${d.imei}" ${assigned.includes(d.imei)?'checked':''}> ${d.name}`;
+    vc.appendChild(chk);
+  });
+  const ci=document.getElementById('gfm-coords-info');
+  if(ci) ci.textContent=fence?'Existing coordinates loaded':`Shape: ${_gfPendingShape}`;
+  openModal('gfModal');
+}
+
+async function saveGeofence(){
+  const id=document.getElementById('gfm-id').value;
+  const name=document.getElementById('gfm-name').value.trim();
+  if(!name){toast('Name required','error');return;}
+  const imeis=[...document.querySelectorAll('#gfm-vehicle-checks input:checked')].map(c=>c.value);
+  const body={name,color:document.getElementById('gfm-color').value,shape:_gfPendingShape,
+    coordinates:_gfPendingCoords||[],assigned_imeis:imeis,
+    alert_entry:document.getElementById('gfm-entry').value==='true',
+    alert_exit:document.getElementById('gfm-exit').value==='true'};
+  try{
+    if(id) await apiPut('/geofences/'+id,body); else await apiPost('/geofences',body);
+    toast('Fence saved','success','🔲');closeModal('gfModal');_gfPendingCoords=null;loadGeofences();
+  }catch(e){toast('Error: '+e.message,'error');}
+}
+
+async function deleteGf(e,id){e.stopPropagation();
+  confirmAction('Delete Fence','Remove this fence?','🗑️',async()=>{
+    try{await apiDel('/geofences/'+id);toast('Deleted','success');loadGeofences();}
+    catch(ex){toast(ex.message,'error');}
+  });
+}
+
+function editGf(e,id){e.stopPropagation();
+  const f=_gfFences.find(x=>x.id===id);if(!f)return;
+  _gfPendingShape=f.shape;
+  _gfPendingCoords=typeof f.coordinates==='string'?JSON.parse(f.coordinates):f.coordinates;
+  openGfModal(f);
+}
+
+function focusFence(id){
+  const f=_gfFences.find(x=>x.id===id);if(!f||!_gfMap) return;
+  try{
+    const c=typeof f.coordinates==='string'?JSON.parse(f.coordinates):f.coordinates;
+    if(f.shape==='circle'&&c.lat) _gfMap.setView([c.lat,c.lng],14);
+    else if(Array.isArray(c)&&c.length>0) _gfMap.fitBounds(L.polygon(c).getBounds());
+  }catch{}
+}
+
+</script>

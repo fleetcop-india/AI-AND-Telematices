@@ -33,8 +33,18 @@
 #include <QSplitter>
 #include <QHeaderView>
 #include <QProgressBar>
+#include <QTcpSocket>
 #include <vector>
 #include <memory>
+
+// ── GT06N per-device persistent connection state ─────────────────
+struct GT06NConn {
+    QTcpSocket* socket   = nullptr;
+    quint16     sn       = 1;       // serial number counter
+    bool        loggedIn = false;   // true after server ACK to login
+    bool        connecting = false; // connect in progress
+    QByteArray  rxBuf;              // incoming data buffer
+};
 
 struct CsvPoint {
     qint64  msEpoch = 0;
@@ -48,7 +58,7 @@ struct VehicleState {
     QString imei, name;
     double  lat = 12.9716, lon = 77.5946;
     double  speed = 0, heading = 0, odometer = 0, engineHours = 0;
-    QString protocol = "JSON_SIM";
+    QString protocol = "GT06N";
     QString status   = "idle";
     bool    engineOn    = true;
     bool    immobilised = false;   // REQ-21: engine cut via web panel
@@ -86,7 +96,7 @@ private slots:
     void onAddVehicle();
     void onRemoveVehicle();
     void onRowSelected(int row);
-    void onSpeedChanged();
+    void onSpeedChanged(int v);
     void onSelectAll();
     void onItemChanged(QTableWidgetItem*);
 
@@ -132,14 +142,35 @@ private:
     void updateSelectedVehicle();
     void updateStats();
     void moveVehicle(VehicleState& v);
+
+    // ── Packet sending ──────────────────────────────────────────
     void sendPacket(const VehicleState& v, const QString& alarm = QString());
-    QString buildJSONPacket(const VehicleState& v, const QString& alarm);
-    QString buildGT06NPacket(const VehicleState& v);
+
+    // AIS140 / NMEA (text)
     QString buildAIS140Packet(const VehicleState& v);
+
+    // GT06N — REAL binary protocol, persistent TCP per device
+    // Login packet:   78 78 | 11 | 01 | IMEI[8 BCD] | SN[2] | CRC[2] | 0D 0A
+    // Location packet:78 78 | len | 12 | datetime[6] | sats | lat[4] | lon[4] | speed | course[2] | cell[7] | alarm | lang | SN[2] | CRC[2] | 0D 0A
+    void        sendGT06N(VehicleState& v, const QString& alarm);
+    QByteArray  buildGT06NLogin   (const VehicleState& v, quint16 sn);
+    QByteArray  buildGT06NLocation(const VehicleState& v, const QString& alarm, quint16 sn);
+    QByteArray  buildGT06NHeartbeat(quint16 sn, bool ignitionOn = true, bool gpsFixed = true, bool immobilised = false);
+
+    void gt06nConnected (const QString& imei);
+    void gt06nDataReady (const QString& imei);
+    void gt06nDisconnected(const QString& imei);
+    void gt06nSocketError(const QString& imei, QAbstractSocket::SocketError err);
+    void closeAllGT06N();
+
     QVector<CsvPoint> parseCsvFile(const QString& path);
     void applyCsvToVehicle(VehicleState& v, const QVector<CsvPoint>& track);
     void appendLog(const QString& msg, const QString& color = "#64748B");
     void appendBulkLog(const QString& msg, const QString& color = "#64748B");
+
+    // ── GT06N persistent connections (keyed by IMEI) ────────────
+    QMap<QString, GT06NConn*> m_gt06nConns;
+    QTimer*                   m_gt06nHbTimer = nullptr; // heartbeat every 30s
 
     // Timers
     QTimer* m_timer      = nullptr;
@@ -168,6 +199,7 @@ private:
     QPushButton*  m_btnAdd      = nullptr;
     QPushButton*  m_btnRemove   = nullptr;
     QPushButton*  m_btnSelectAll= nullptr;
+    QPushButton*  m_btnSendSelected = nullptr;  // toggle: send all vs send selected only
     QSpinBox*     m_intervalSpin= nullptr;
     QComboBox*    m_protocolCombo=nullptr;
     QLabel*       m_selIMEI     = nullptr;

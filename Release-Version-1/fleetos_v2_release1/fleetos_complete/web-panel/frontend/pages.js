@@ -16,7 +16,7 @@ const T = {
   iconDel:   '<svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>',
   iconEye:   '<svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
   iconPlay:  '<svg width="12" height="12" fill="currentColor" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21"/></svg>',
-  btn: (cls, icon, cb, tip='') => `<button class="btn-icon ${cls}" onclick="${cb}" title="${tip}" style="width:28px;height:28px">${icon}</button>`,
+  btn: (cls, icon, cb, tip='') => `<button type="button" class="btn-icon ${cls}" onclick="${cb}" title="${tip}" style="width:28px;height:28px;cursor:pointer">${icon}</button>`,
   acts: (...b) => `<div style="display:flex;gap:3px;align-items:center">${b.join('')}</div>`,
 };
 
@@ -107,6 +107,7 @@ Pages['users'] = {
             <button class="btn btn-secondary btn-sm" onclick="downloadTemplate('users')">⬇ Template</button>
             <label class="btn btn-secondary btn-sm" style="cursor:pointer;margin:0">📤 Import<input type="file" accept=".csv" style="display:none" onchange="bulkImportEntity('users',this)"></label>
             <button class="btn btn-secondary btn-sm" onclick="exportCSV('uTable','users')">⬇ Export</button>
+            <button class="btn btn-danger btn-sm" onclick="bulkDelete('user')" style="background:#ef4444">🗑 Delete Selected</button>
             <button class="btn btn-primary btn-sm" onclick="openUserModal()">+ Add User</button>
           </div>
         </div>
@@ -140,7 +141,7 @@ Pages['users'] = {
       const lbl=V.$('u-ct-lbl');if(lbl)lbl.textContent=`${M.users.length} total`;
       const sbct=V.$('sb-u-ct');if(sbct)sbct.textContent=M.users.length;
       if(!data.length){tb.innerHTML=T.empty(9,'No users found');return;}
-      tb.innerHTML=data.map(u=>`<tr>
+      tb.innerHTML=data.map(u=>`<tr data-id="${u.id}">
         <td><input type="checkbox" style="accent-color:var(--primary)"></td>
         <td><div style="display:flex;align-items:center;gap:11px">
           <div style="width:34px;height:34px;border-radius:10px;background:${V.gc(u.email)};display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:12px;flex-shrink:0">${V.ini(u.fname)}</div>
@@ -152,7 +153,7 @@ Pages['users'] = {
         <td><span style="font-weight:600">${u.device_count||0}</span><span style="color:var(--muted)"> / ${u.device_limit||'∞'}</span></td>
         <td style="font-size:11px;color:var(--muted)">${T.ts(u.last_login)||'Never'}</td>
         <td>${T.stBadge(u.status)}</td>
-        <td>${T.acts(T.btn('',T.iconEye,`viewUser('${u.id}')`,  'View'),T.btn('edit',T.iconEdit,`openUserModal('${u.id}')`, 'Edit'),T.btn('del',T.iconDel, `confirmDel('user','${u.id}','${u.email}')`, 'Delete'))}</td>
+        <td>${T.acts(T.btn('',T.iconEye,`viewUser('${u.id}')`,  'View'),T.btn('edit',T.iconEdit,`openUserModal('${u.id}')`, 'Edit'),T.btn('del',T.iconDel, `confirmDel('user','${u.id}','User')`, 'Delete'))}</td>
       </tr>`).join('');
       T.pager('u-pager','u-pg-info',data.length);
     }catch(e){tb.innerHTML=T.empty(9,'⚠️ '+e.message);}
@@ -171,6 +172,7 @@ Pages['devices'] = {
             <button class="btn btn-secondary btn-sm" onclick="downloadTemplate('devices')">⬇ Template</button>
             <label class="btn btn-secondary btn-sm" style="cursor:pointer;margin:0">📤 Import<input type="file" accept=".csv" style="display:none" onchange="bulkImportEntity('devices',this)"></label>
             <button class="btn btn-secondary btn-sm" onclick="exportCSV('dTable','devices')">⬇ Export</button>
+            <button class="btn btn-danger btn-sm" onclick="bulkDelete('device')" style="background:#ef4444">🗑 Delete Selected</button>
             <button class="btn btn-primary btn-sm" onclick="openDevModal()">+ Add Device</button>
           </div>
         </div>
@@ -207,9 +209,10 @@ Pages['devices'] = {
       const sbct=V.$('sb-d-ct');if(sbct)sbct.textContent=M.devices.length;
       if(!data.length){tb.innerHTML=T.empty(11,'No devices found');return;}
       tb.innerHTML=data.map(d=>{
+        const rowDataId=d.id;
         const st=d.status||'offline',col=stC[st]||'#94a3b8';
         const dur=d.state_mins!=null?`<div style="font-size:10px;color:${col};margin-top:2px">${Math.floor(d.state_mins/60)}h ${d.state_mins%60}m</div>`:'';
-        return `<tr>
+        return `<tr data-id="${rowDataId}">
           <td><input type="checkbox" style="accent-color:var(--primary)"></td>
           <td><div style="font-weight:600;font-size:13px">${d.name}${d.engine_cut?'<span style="margin-left:5px;padding:1px 5px;background:#FEF2F2;color:#DC2626;font-size:10px;border-radius:4px;font-weight:700">✂️CUT</span>':''}</div>
               <div style="font-family:var(--mono);font-size:10px;color:var(--muted)">${d.imei}</div></td>
@@ -221,7 +224,7 @@ Pages['devices'] = {
           <td style="font-size:11px;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.address_short||'No GPS'}</td>
           <td style="font-family:var(--mono);font-size:12px;font-weight:700;color:${(+d.speed||0)>0?'#22c55e':'var(--muted)'}">${(+d.speed||0).toFixed(0)}</td>
           <td style="font-size:11px;color:var(--muted);white-space:nowrap">${T.ts(d.last_seen)||'Never'}</td>
-          <td>${T.acts(T.btn('edit',T.iconEdit,`openDevModal('${d.id}')`, 'Edit'),T.btn('',d.engine_cut?'✅':'✂️',`openEngineCutModal('${d.imei}','${d.name}',${!!d.engine_cut})`,d.engine_cut?'Restore':'Cut'),T.btn('',T.iconPlay,`openPlaybackForImei('${d.imei}')`, 'Playback'),T.btn('del',T.iconDel, `confirmDel('device','${d.id}','${d.name}')`, 'Delete'))}</td>
+          <td>${T.acts(T.btn('edit',T.iconEdit,`openDevModal('${d.id}')`, 'Edit'),T.btn('',d.engine_cut?'✅':'✂️',`openEngineCutModal('${d.imei}','${d.name}',${!!d.engine_cut})`,d.engine_cut?'Restore':'Cut'),T.btn('',T.iconPlay,`openPlaybackForImei('${d.imei}')`, 'Playback'),T.btn('del',T.iconDel, `confirmDel('device','${d.id}','Device')`, 'Delete'))}</td>
         </tr>`;
       }).join('');
       T.pager('d-pager','d-pg-info',data.length);
@@ -241,6 +244,7 @@ Pages['drivers'] = {
             <button class="btn btn-secondary btn-sm" onclick="downloadTemplate('drivers')">⬇ Template</button>
             <label class="btn btn-secondary btn-sm" style="cursor:pointer;margin:0">📤 Import<input type="file" accept=".csv" style="display:none" onchange="bulkImportEntity('drivers',this)"></label>
             <button class="btn btn-secondary btn-sm" onclick="exportCSV('drTable','drivers')">⬇ Export</button>
+            <button class="btn btn-danger btn-sm" onclick="bulkDelete('driver')" style="background:#ef4444">🗑 Delete Selected</button>
             <button class="btn btn-primary btn-sm" onclick="openDrvModal()">+ Add Driver</button>
           </div>
         </div>
@@ -275,9 +279,10 @@ Pages['drivers'] = {
       const sbct=V.$('sb-dr-ct');if(sbct)sbct.textContent=M.drivers.length;
       if(!data.length){tb.innerHTML=T.empty(9,'No drivers found');return;}
       tb.innerHTML=data.map(d=>{
+        const rowDrvId=d.id;
         const exp=d.lic_expiry?new Date(d.lic_expiry):null,exDays=exp?Math.floor((exp-today)/86400000):null;
         const exStyle=exDays!=null?(exDays<0?'color:#DC2626;font-weight:600':exDays<90?'color:#D97706':''):'';
-        return `<tr>
+        return `<tr data-id="${rowDrvId}">
           <td><input type="checkbox" style="accent-color:var(--primary)"></td>
           <td><div style="display:flex;align-items:center;gap:11px">
             <div style="width:34px;height:34px;border-radius:10px;background:${V.gc(d.fname)};display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:12px;flex-shrink:0">${V.ini(d.fname)}</div>
@@ -289,7 +294,7 @@ Pages['drivers'] = {
           <td style="font-size:12px">${d.device_name||'<span style="color:var(--muted)">Unassigned</span>'}</td>
           <td><div style="display:flex;align-items:center;gap:8px;min-width:110px"><div style="flex:1;background:var(--border);border-radius:99px;height:6px;overflow:hidden"><div style="width:${d.dss_score||75}%;height:100%;background:${(+d.dss_score||75)>=80?'#059669':(+d.dss_score||75)>=60?'#D97706':'#DC2626'};border-radius:99px"></div></div><span style="font-weight:700;color:${(+d.dss_score||75)>=80?'#059669':(+d.dss_score||75)>=60?'#D97706':'#DC2626'};min-width:28px;font-size:12px">${d.dss_score||75}</span></div></td>
           <td>${T.stBadge(d.is_active?'active':'inactive')}</td>
-          <td>${T.acts(T.btn('edit',T.iconEdit,`openDrvModal('${d.id}')`, 'Edit'),T.btn('del',T.iconDel, `confirmDel('driver','${d.id}','${d.fname} ${d.lname}')`, 'Delete'))}</td>
+          <td>${T.acts(T.btn('edit',T.iconEdit,`openDrvModal('${d.id}')`, 'Edit'),T.btn('del',T.iconDel, `confirmDel('driver','${d.id}','Driver')`, 'Delete'))}</td>
         </tr>`;
       }).join('');
       T.pager('dr-pager','dr-pg-info',data.length);

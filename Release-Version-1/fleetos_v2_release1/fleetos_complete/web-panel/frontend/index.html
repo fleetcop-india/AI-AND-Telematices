@@ -175,6 +175,7 @@ body {
 .btn-amber{background:var(--amber-bg);border:1px solid #FCD34D;color:var(--amber)}
 .btn-sm{padding:5px 10px;font-size:11.5px}
 .btn-icon{width:30px;height:30px;padding:0;border-radius:5px;border:1px solid var(--border);background:var(--white);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .15s;color:var(--muted)}
+.btn-icon svg,.btn-icon svg *{pointer-events:none}
 .btn-icon:hover{border-color:var(--border2);color:var(--text);background:var(--bg)}
 .btn-icon.del:hover{background:var(--red-bg);border-color:#FCA5A5;color:var(--red)}
 .btn-icon.edit:hover{background:var(--primary-light);border-color:#BFDBFE;color:var(--primary)}
@@ -252,9 +253,9 @@ td{padding:9px 14px;font-size:13px;vertical-align:middle}
 .mbody{padding:20px 22px}
 .mfooter{padding:16px 22px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;position:sticky;bottom:0;background:var(--white)}
 /* CONFIRM */
-.confirm-overlay{position:fixed;inset:0;background:rgba(15,23,42,.5);backdrop-filter:blur(4px);z-index:400;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .2s}
+.confirm-overlay{position:fixed;inset:0;background:rgba(15,23,42,.55);backdrop-filter:blur(5px);z-index:9999;display:none;align-items:center;justify-content:center;opacity:1;pointer-events:all;animation:fadeIn .15s ease}
 .confirm-overlay.open{opacity:1;pointer-events:all}
-.confirm-card{background:var(--white);border-radius:16px;width:360px;padding:22px;box-shadow:var(--sh-lg);transform:scale(.95);transition:transform .2s;border:1px solid var(--border)}
+.confirm-card{background:var(--white);border-radius:12px;width:380px;padding:28px 28px 22px;box-shadow:0 24px 60px rgba(0,0,0,.18);border:1px solid var(--border);}
 .confirm-overlay.open .confirm-card{transform:scale(1)}
 .confirm-ico{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px;margin-bottom:12px}
 .confirm-title{font-size:16px;font-weight:800;margin-bottom:6px}
@@ -409,8 +410,10 @@ td{padding:9px 14px;font-size:13px;vertical-align:middle}
     <div class="ico-btn" onclick="nav('profile')" title="Profile"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></div>
   </div>
 </div>
-<div id="page-root"></div>
-</div>
+  <div id="page-root" style="flex:1;overflow:auto;min-height:0"></div>
+</div><!-- end #app -->
+<div id="modal-root"></div>
+
 <script src="/app.js?v=4"></script>
 <script src="/pages.js?v=1"></script>
 </body>

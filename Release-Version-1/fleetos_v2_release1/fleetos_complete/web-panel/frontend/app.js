@@ -33,7 +33,7 @@ const API = {
     catch { throw new Error('Server unreachable'); }
     let data = null;
     try { data = await res.json(); } catch {}
-    if (res.status === 401) { VM.logout(); return null; }
+    if (res.status === 401) { if(typeof doLogout==='function') doLogout(); return null; }
     if (!res.ok) throw new Error((data&&data.error)||`HTTP ${res.status}`);
     return data;
   },
@@ -105,46 +105,121 @@ document.addEventListener('click', e=>{
 });
 
 // ── ViewModel: Confirm dialog ─────────────────────────────────────
-let _confirmCb = null;
+// ── Delete / Confirm system ─────────────────────────────────────
+// Simple, reliable: store cb in closure, not global variable
+
 function confirmAction(title, msg, icon, cb) {
-  const root = V.$('modal-root') || document.body;
-  let ovl = V.$('confirmOvl');
-  if (!ovl) {
-    ovl = document.createElement('div');
-    ovl.id = 'confirmOvl';
-    ovl.className = 'confirm-overlay';
-    ovl.innerHTML = `<div class="confirm-card">
-      <div class="confirm-ico" id="conf-ico">🗑️</div>
-      <div class="confirm-title" id="conf-title">Confirm</div>
-      <div class="confirm-msg" id="conf-msg"></div>
-      <div class="confirm-btns">
-        <button class="btn btn-secondary" onclick="closeConfirm()">Cancel</button>
-        <button class="btn btn-danger" onclick="execConfirm()">Confirm</button>
-      </div></div>`;
-    root.appendChild(ovl);
-  }
-  V.$('conf-title').textContent = title;
-  V.$('conf-msg').textContent   = msg;
-  if (icon) V.$('conf-ico').textContent = icon;
-  _confirmCb = cb;
-  ovl.style.display = 'flex';
-  ovl.style.opacity = '1';
-  ovl.style.pointerEvents = 'all';
+  const existing = document.getElementById('flDlgOvl');
+  if (existing) existing.remove();
+
+  const ovl = document.createElement('div');
+  ovl.id = 'flDlgOvl';
+  ovl.setAttribute('style',
+    'position:fixed;inset:0;background:rgba(15,23,42,.65);backdrop-filter:blur(6px);' +
+    'z-index:99999;display:flex;align-items:center;justify-content:center;' +
+    'pointer-events:all'
+  );
+
+  const card = document.createElement('div');
+  card.setAttribute('style',
+    'background:var(--white);border-radius:12px;width:420px;max-width:92vw;' +
+    'padding:32px 28px 24px;box-shadow:0 24px 60px rgba(0,0,0,.25);' +
+    'border:1px solid var(--border);text-align:center;pointer-events:all'
+  );
+  card.innerHTML =
+    '<div style="font-size:38px;margin-bottom:10px">' + (icon||'🗑️') + '</div>' +
+    '<div style="font-size:17px;font-weight:800;color:var(--text);margin-bottom:8px">' + title + '</div>' +
+    '<div style="font-size:13px;color:var(--muted);margin-bottom:24px;line-height:1.6">' + msg + '</div>' +
+    '<div style="display:flex;gap:12px;justify-content:center">' +
+    '<button type="button" id="flDlgCancel" style="min-width:110px;padding:9px 20px;border-radius:7px;border:1.5px solid var(--border);background:var(--white);color:var(--text);font-size:14px;font-weight:600;cursor:pointer">Cancel</button>' +
+    '<button type="button" id="flDlgOk"     style="min-width:110px;padding:9px 20px;border-radius:7px;border:none;background:#DC2626;color:#fff;font-size:14px;font-weight:700;cursor:pointer">Delete</button>' +
+    '</div>';
+
+  ovl.appendChild(card);
+  document.body.appendChild(ovl);
+
+  document.getElementById('flDlgCancel').onclick = function(e) { e.stopPropagation(); ovl.remove(); };
+  document.getElementById('flDlgOk').onclick     = function(e) { e.stopPropagation(); ovl.remove(); cb(); };
+  ovl.onclick = function(e) { if (e.target === ovl) ovl.remove(); };
 }
-function closeConfirm() {
-  const o=V.$('confirmOvl'); if(o){o.style.display='none';} _confirmCb=null;
+
+function closeConfirm() { const o=document.getElementById('flDlgOvl'); if(o) o.remove(); }
+function execConfirm()  {}
+
+// ── Delete single item ────────────────────────────────────────────
+// Called by per-row delete button: confirmDel('device', uuid, 'Device')
+async function confirmDel(type, id, label) {
+  const name = label || type;
+  confirmAction(
+    'Delete ' + type.charAt(0).toUpperCase() + type.slice(1),
+    '"' + name + '" will be permanently removed from the database. This cannot be undone.',
+    '🗑️',
+    async function() {
+      try {
+        // Use bulk-delete endpoint with single ID — consistent, works with cascade
+        const r = await apiPost('/bulk-delete', { type: type, ids: [id] });
+        if (r && r.ok >= 1) {
+          toast(name + ' deleted', 'success', '🗑️');
+        } else {
+          const errMsg = (r && r.errors && r.errors[0]) || 'Unknown error';
+          toast('Delete failed: ' + errMsg, 'error', '❌');
+          return;
+        }
+        if (type === 'user'  ) { M.users   = []; Pages['users']   && Pages['users']._load();   }
+        if (type === 'device') { M.devices = []; Pages['devices'] && Pages['devices']._load(); }
+        if (type === 'driver') { M.drivers = []; Pages['drivers'] && Pages['drivers']._load(); }
+      } catch(e) {
+        toast('Delete failed: ' + e.message, 'error', '❌');
+        console.error('[confirmDel]', type, id, e);
+      }
+    }
+  );
 }
-function execConfirm() { closeConfirm(); if(_confirmCb) _confirmCb(); }
-async function confirmDel(type, id, name) {
-  confirmAction('Delete '+type, `Delete "${name}"? This cannot be undone.`, '🗑️', async()=>{
-    try {
-      await apiDel('/'+type+'s/'+id);
-      toast(`${name} deleted`, 'success', '🗑️');
-      if(type==='user')   nav('users');
-      if(type==='device') nav('devices');
-      if(type==='driver') nav('drivers');
-    } catch(e) { toast('Error: '+e.message, 'error'); }
+
+// ── Delete multiple selected rows ─────────────────────────────────
+// Called by "Delete Selected" toolbar button
+async function bulkDelete(type) {
+  const tableId = { user:'uTable', device:'dTable', driver:'drTable' }[type];
+  const tbl = document.getElementById(tableId);
+  if (!tbl) return;
+
+  // Collect IDs from checked rows (rows must have data-id attribute)
+  const ids = [];
+  tbl.querySelectorAll('tr[data-id]').forEach(function(tr) {
+    const cb = tr.querySelector('input[type=checkbox]');
+    if (cb && cb.checked) ids.push(tr.getAttribute('data-id'));
   });
+
+  if (!ids.length) {
+    toast('Select at least one row to delete', 'warning', '⚠️');
+    return;
+  }
+
+  const plural = ids.length > 1;
+  confirmAction(
+    'Delete ' + ids.length + ' ' + type + (plural ? 's' : ''),
+    ids.length + ' ' + type + (plural ? 's' : '') + ' will be permanently removed from the database.',
+    '🗑️',
+    async function() {
+      try {
+        const r = await apiPost('/bulk-delete', { type: type, ids: ids });
+        const ok   = (r && r.ok)     || 0;
+        const errs = (r && r.errors) || [];
+        if (ok > 0) {
+          toast(ok + ' ' + type + (ok>1?'s':'') + ' deleted' + (errs.length ? ', '+errs.length+' failed' : ''), 'success', '🗑️');
+        } else {
+          toast('Delete failed: ' + (errs[0]||'Unknown error'), 'error', '❌');
+          return;
+        }
+        if (type === 'user'  ) { M.users   = []; Pages['users']   && Pages['users']._load();   }
+        if (type === 'device') { M.devices = []; Pages['devices'] && Pages['devices']._load(); }
+        if (type === 'driver') { M.drivers = []; Pages['drivers'] && Pages['drivers']._load(); }
+      } catch(e) {
+        toast('Bulk delete failed: ' + e.message, 'error', '❌');
+        console.error('[bulkDelete]', type, ids, e);
+      }
+    }
+  );
 }
 
 // ── ViewModel: Utilities ──────────────────────────────────────────
@@ -152,10 +227,14 @@ function refreshData() {
   const page = document.querySelector('.page-view.active')?.dataset?.page;
   if (page) nav(page);
 }
-function selAll(cb, tableId) {
-  const t=V.$(tableId); if(!t) return;
-  t.querySelectorAll('input[type=checkbox]').forEach(c=>c.checked=cb.checked);
+function selAll(headerCb, tableId) {
+  const tbl = document.getElementById(tableId);
+  if (!tbl) return;
+  tbl.querySelectorAll('tr[data-id] input[type=checkbox]').forEach(function(cb) {
+    cb.checked = headerCb ? headerCb.checked : true;
+  });
 }
+
 function setTab(el) {
   el.closest('.tabs-row')?.querySelectorAll('.tab-item').forEach(t=>t.classList.remove('on'));
   el.classList.add('on');

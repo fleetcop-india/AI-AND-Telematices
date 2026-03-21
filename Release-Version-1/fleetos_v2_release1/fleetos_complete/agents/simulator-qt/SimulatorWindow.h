@@ -86,7 +86,7 @@ private slots:
     void onAddVehicle();
     void onRemoveVehicle();
     void onRowSelected(int row);
-    void onSpeedChanged(int v);
+    void onSpeedChanged();
     void onSelectAll();
     void onItemChanged(QTableWidgetItem*);
 

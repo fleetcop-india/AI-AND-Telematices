@@ -446,12 +446,12 @@ void SimulatorWindow::buildAlarmTab() {
     btnCut->setStyleSheet("background:#EF4444;color:#fff;border-radius:6px;padding:5px 12px;font-weight:700;");
     auto* btnRestore = new QPushButton("✅ Restore");
     btnRestore->setStyleSheet("background:#10B981;color:#fff;border-radius:6px;padding:5px 12px;font-weight:700;");
-    connect(btnCut,[this,cutImei](){
+    connect(btnCut, &QPushButton::clicked, this,[this,cutImei](){
         auto it=std::find_if(m_vehicles.begin(),m_vehicles.end(),[&](const VehicleState& v){return v.imei==cutImei->text();});
         if(it!=m_vehicles.end()){ it->immobilised=true; it->engineOn=false; it->speed=0;
             appendLog("✂️ Engine cut locally: "+cutImei->text(),"#EF4444"); updateTable(); }
     });
-    connect(btnRestore,[this,cutImei](){
+    connect(m_speedSlider, &QSlider::sliderReleased, this, [this,cutImei](){
         auto it=std::find_if(m_vehicles.begin(),m_vehicles.end(),[&](const VehicleState& v){return v.imei==cutImei->text();});
         if(it!=m_vehicles.end()){ it->immobilised=false; it->engineOn=true;
             appendLog("✅ Engine restored locally: "+cutImei->text(),"#10B981"); updateTable(); }
@@ -991,7 +991,7 @@ void SimulatorWindow::onBroadcastCustomAlarm() {
     appendLog("📣 Custom alarm queued: "+alarm,"#6366F1");
 }
 
-void SimulatorWindow::onSpeedChanged(int) {
+void SimulatorWindow::onSpeedChanged() {
     if(m_selectedRow<0||m_selectedRow>=(int)m_vehicles.size()) return;
     int spd=m_speedSlider?m_speedSlider->value():0;
     m_vehicles[m_selectedRow].speed=spd;

@@ -38,10 +38,14 @@
 #include <memory>
 
 // ── GT06N per-device persistent connection state ─────────────────
+// ── Protocol variant for a GT06N connection ──────────────────────
+// 0x12 = GPS+LBS combined (port 6015 style)
+// 0x22 = GPS-only, no LBS  (port 6023 style)
 struct GT06NConn {
-    QTcpSocket* socket   = nullptr;
-    quint16     sn       = 1;       // serial number counter
-    bool        loggedIn = false;   // true after server ACK to login
+    QTcpSocket* socket    = nullptr;
+    quint16     sn        = 1;      // serial number counter
+    quint8      proto     = 0x12;   // location protocol: 0x12 or 0x22
+    bool        loggedIn  = false;  // true after server ACK to login
     bool        connecting = false; // connect in progress
     QByteArray  rxBuf;              // incoming data buffer
 };
@@ -58,8 +62,10 @@ struct VehicleState {
     QString imei, name;
     double  lat = 12.9716, lon = 77.5946;
     double  speed = 0, heading = 0, odometer = 0, engineHours = 0;
-    QString protocol = "GT06N";
-    QString status   = "idle";
+    QString protocol    = "GT06N";
+    quint8  gps_proto   = 0x22;   // 0x22 GPS-only | 0x12 GPS+LBS
+    quint16 gps_port    = 6023;   // per-vehicle target port
+    QString status      = "idle";
     bool    engineOn    = true;
     bool    immobilised = false;   // REQ-21: engine cut via web panel
     bool    selected    = false;   // REQ-20: multi-device selection
@@ -74,6 +80,9 @@ struct VehicleState {
     QVector<CsvPoint> csvTrack;
     int     csvIdx  = -1;
     bool    csvLoop = true;
+    // CSV per-device loop/interval control
+    bool    csvLoopOn    = true;   // keep looping when track ends
+    int     csvInterval  = -1;     // -1 = use global interval, else ms
     // Alarms
     bool    panicActive     = false;
     bool    overspeedActive = false;
@@ -155,12 +164,14 @@ private:
     void        sendGT06N(VehicleState& v, const QString& alarm);
     QByteArray  buildGT06NLogin   (const VehicleState& v, quint16 sn);
     QByteArray  buildGT06NLocation(const VehicleState& v, const QString& alarm, quint16 sn);
+    QByteArray  buildGT06NLocation22(const VehicleState& v, quint16 sn); // 0x22 GPS-only, no LBS
     QByteArray  buildGT06NHeartbeat(quint16 sn, bool ignitionOn = true, bool gpsFixed = true, bool immobilised = false);
+    QByteArray  buildGT06NCommandReply(const QByteArray& serverFlagBit, const QString& replyStr, quint16 sn);
 
-    void gt06nConnected (const QString& imei);
-    void gt06nDataReady (const QString& imei);
-    void gt06nDisconnected(const QString& imei);
-    void gt06nSocketError(const QString& imei, QAbstractSocket::SocketError err);
+    void gt06nConnected (const QString& connKey);
+    void gt06nDataReady (const QString& connKey);
+    void gt06nDisconnected(const QString& connKey);
+    void gt06nSocketError(const QString& connKey, QAbstractSocket::SocketError err);
     void closeAllGT06N();
 
     QVector<CsvPoint> parseCsvFile(const QString& path);
@@ -210,14 +221,22 @@ private:
     QCheckBox*    m_chkPanic    = nullptr;
     QCheckBox*    m_chkOverspeed= nullptr;
     QLineEdit*    m_hostEdit    = nullptr;
-    QSpinBox*     m_portSpin    = nullptr;
+    QSpinBox*     m_portSpin    = nullptr;   // port for 0x22
+    QSpinBox*     m_port12Spin  = nullptr;   // port for 0x12
+    QLineEdit*    m_host12Edit  = nullptr;   // host for 0x12 (can differ)
     QSystemTrayIcon* m_tray     = nullptr;
     QNetworkAccessManager* m_nam= nullptr;
     QLineEdit*    m_apiEdit     = nullptr;
     QPushButton*  m_btnRefresh  = nullptr;
     QPushButton*  m_btnLoadCSV  = nullptr;
     QComboBox*    m_csvImeiCombo= nullptr;
+    QComboBox*    m_protoCombo  = nullptr; // 0x12 GPS+LBS | 0x22 GPS-only
     QLabel*       m_csvStatusLabel=nullptr;
+    QLabel*       m_csvProgressLabel=nullptr; // shows N/total pts
+    QPushButton*  m_btnCsvLoop=nullptr;        // loop toggle
+    QPushButton*  m_btnCsvStart=nullptr;       // start CSV loop
+    QPushButton*  m_btnCsvStop=nullptr;        // stop CSV loop
+    QSpinBox*     m_csvIntervalSpin=nullptr;   // per-packet interval ms
     QLabel*       m_lbOnline    = nullptr;
     QLabel*       m_lbPackets   = nullptr;
     QLabel*       m_lbKm        = nullptr;

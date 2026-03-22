@@ -84,7 +84,7 @@ SimulatorWindow::SimulatorWindow(QWidget* parent) : QMainWindow(parent) {
     connect(m_statsTimer, &QTimer::timeout, this, &SimulatorWindow::onStatsTimer);
     m_statsTimer->start(1000);
 
-    // GT06N heartbeat — send 0x23 keep-alive every 30s on all open connections
+    // GT06N heartbeat — send 0x13 status packet every 30s per spec section 5.4
     m_gt06nHbTimer = new QTimer(this);
     connect(m_gt06nHbTimer, &QTimer::timeout, this, [this](){
         for (auto it = m_gt06nConns.begin(); it != m_gt06nConns.end(); ++it) {
@@ -95,7 +95,8 @@ SimulatorWindow::SimulatorWindow(QWidget* parent) : QMainWindow(parent) {
             // Find the vehicle for this IMEI to encode real ignition/GPS state
             bool ignOn = true, gpsOk = true, imob = false;
             for (const auto& v : m_vehicles) {
-                if (v.imei == it.key()) {
+                // connKey is "imei:proto" — extract IMEI part
+                if (v.imei == it.key().section(':', 0, 0)) {
                     ignOn = v.engineOn;
                     gpsOk = v.gpsFixed;
                     imob  = v.immobilised;
@@ -161,29 +162,109 @@ void SimulatorWindow::buildUI() {
     mkStat("Interval",&m_lbFreq,    "⏱");
     root->addLayout(statsRow);
 
-    // ── Connection bar ────────────────────────────────────────
-    auto* connBar = new QHBoxLayout; connBar->setSpacing(6);
-    auto* lblHost = new QLabel("GPS Server:");
-    m_hostEdit = new QLineEdit("127.0.0.1"); m_hostEdit->setFixedWidth(120);
-    m_portSpin = new QSpinBox; m_portSpin->setRange(1,65535); m_portSpin->setValue(6001); m_portSpin->setFixedWidth(75);
-    auto* lblInt = new QLabel("Interval:");
-    m_intervalSpin = new QSpinBox; m_intervalSpin->setRange(1,60); m_intervalSpin->setValue(5);
+    // ── Connection bar ────────────────────────────────────────────────────
+    // Single host:port for BOTH protocols.
+    // Protocol selector: 0x22 (GPS-only, 28B) | 0x12 (GPS+LBS, 36B) | Both
+    // "Both" sends 0x22 first then 0x12 on the same TCP connection each tick.
+    auto* connOuter = new QVBoxLayout; connOuter->setSpacing(4);
+    auto* connBar   = new QHBoxLayout; connBar->setSpacing(6);
+
+    // Host
+    m_hostEdit = new QLineEdit("www.fleetcop.com");
+    m_hostEdit->setFixedWidth(160);
+    m_hostEdit->setToolTip("GPS server hostname — same for both protocols");
+
+    // Single port
+    m_portSpin = new QSpinBox;
+    m_portSpin->setRange(1, 65535);
+    m_portSpin->setValue(6023);
+    m_portSpin->setFixedWidth(72);
+    m_portSpin->setToolTip("Port — same for both protocols");
+
+    // Protocol selector  0x22 | 0x12 | Both
+    m_protoCombo = new QComboBox;
+    m_protoCombo->setFixedWidth(195);
+    m_protoCombo->addItem("0x22  GPS-only  (28 bytes)",  QVariant(0x22));
+    m_protoCombo->addItem("0x12  GPS + LBS (36 bytes)",  QVariant(0x12));
+    m_protoCombo->addItem("Both  0x22 + 0x12  (dual)",   QVariant(0xFF));
+    m_protoCombo->setToolTip( "0x22 — 28-byte GPS-only packet (no LBS cell data)"
+        "0x12 — 36-byte GPS+LBS packet (includes MCC/MNC/LAC/CellID)"
+        "Both — sends 0x22 then 0x12 on the same connection each tick");
+    // Colour-code selection
+    connect(m_protoCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int idx) {
+        // Apply to all existing vehicles
+        quint8 sel = quint8(m_protoCombo->itemData(idx).toInt());
+        for (auto& v : m_vehicles) {
+            v.gps_proto = sel;
+            v.gps_port  = quint16(m_portSpin->value());
+        }
+        updateTable();
+        const QString lbl = idx==0?"0x22 GPS-only":idx==1?"0x12 GPS+LBS":"Both 0x22+0x12";
+        appendLog(QString("📡 Protocol → %1  port %2  (all vehicles)")
+            .arg(lbl).arg(m_portSpin->value()), "#7C3AED");
+    });
+    // Keep port in sync with proto combo for vehicles
+    connect(m_portSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, [this](int port) {
+        for (auto& v : m_vehicles) v.gps_port = quint16(port);
+    });
+
+    // Interval
+    auto* lblInt    = new QLabel("Interval:");
+    m_intervalSpin  = new QSpinBox;
+    m_intervalSpin->setRange(1, 60); m_intervalSpin->setValue(5);
     m_intervalSpin->setSuffix(" s"); m_intervalSpin->setFixedWidth(70);
+
+    // API
     auto* lblApi = new QLabel("API:");
-    m_apiEdit = new QLineEdit("http://127.0.0.1:8080"); m_apiEdit->setFixedWidth(180);
+    m_apiEdit    = new QLineEdit("http://127.0.0.1:8080");
+    m_apiEdit->setFixedWidth(180);
     m_btnRefresh = new QPushButton("↺ Load Devices");
-    m_btnRefresh->setStyleSheet("background:#0EA5E9;color:#fff;border-radius:6px;padding:5px 10px;font-weight:600;");
-    connect(m_btnRefresh,&QPushButton::clicked,this,[this]{ fetchDevicesFromAPI(); });
+    m_btnRefresh->setStyleSheet(
+        "background:#0EA5E9;color:#fff;border-radius:6px;padding:5px 10px;font-weight:600;");
+    connect(m_btnRefresh, &QPushButton::clicked, this, [this]{ fetchDevicesFromAPI(); });
+
+    // Start / Stop
     m_btnStart = new QPushButton("▶  Start All"); m_btnStart->setObjectName("btnStart");
     m_btnStop  = new QPushButton("⏹  Stop");      m_btnStop->setObjectName("btnStop");
-    connect(m_btnStart,&QPushButton::clicked,this,&SimulatorWindow::onStartAll);
-    connect(m_btnStop, &QPushButton::clicked,this,&SimulatorWindow::onStopAll);
-    connBar->addWidget(lblHost); connBar->addWidget(m_hostEdit); connBar->addWidget(m_portSpin);
-    connBar->addWidget(lblInt);  connBar->addWidget(m_intervalSpin);
-    connBar->addWidget(lblApi);  connBar->addWidget(m_apiEdit); connBar->addWidget(m_btnRefresh);
+    connect(m_btnStart, &QPushButton::clicked, this, &SimulatorWindow::onStartAll);
+    connect(m_btnStop,  &QPushButton::clicked, this, &SimulatorWindow::onStopAll);
+
+    // Protocol info label (updates when combo changes)
+    auto* protoInfoLbl = new QLabel;
+    protoInfoLbl->setStyleSheet("color:#64748B;font-size:10px;");
+    auto updateProtoInfo = [protoInfoLbl, this]() {
+        int idx = m_protoCombo ? m_protoCombo->currentIndex() : 0;
+        if      (idx==0) protoInfoLbl->setText("28B · no LBS · degrees×1,800,000");
+        else if (idx==1) protoInfoLbl->setText("36B · MCC/MNC/LAC/CellID · degrees×1,800,000");
+        else             protoInfoLbl->setText("both packets sent each tick on same connection");
+    };
+    connect(m_protoCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [updateProtoInfo](int){ updateProtoInfo(); });
+    updateProtoInfo();
+
+    // m_host12Edit / m_port12Spin kept as null (no longer separate)
+    m_host12Edit = nullptr;
+    m_port12Spin = nullptr;
+
+    connBar->addWidget(new QLabel("Host:"));  connBar->addWidget(m_hostEdit);
+    connBar->addWidget(new QLabel("Port:"));  connBar->addWidget(m_portSpin);
+    connBar->addWidget(new QLabel("Proto:")); connBar->addWidget(m_protoCombo);
+    connBar->addWidget(protoInfoLbl);
     connBar->addStretch();
-    connBar->addWidget(m_btnStart); connBar->addWidget(m_btnStop);
-    root->addLayout(connBar);
+    connBar->addWidget(m_btnStart);
+    connBar->addWidget(m_btnStop);
+
+    auto* apiBar = new QHBoxLayout; apiBar->setSpacing(6);
+    apiBar->addWidget(lblInt); apiBar->addWidget(m_intervalSpin);
+    apiBar->addWidget(lblApi); apiBar->addWidget(m_apiEdit);
+    apiBar->addWidget(m_btnRefresh);
+    apiBar->addStretch();
+
+    connOuter->addLayout(connBar);
+    connOuter->addLayout(apiBar);
+    root->addLayout(connOuter);
 
     // ── Tabs ──────────────────────────────────────────────────
     m_tabs = new QTabWidget;
@@ -232,22 +313,196 @@ void SimulatorWindow::buildMainTab() {
     tbRow->addWidget(new QLabel("Protocol:")); tbRow->addWidget(m_protocolCombo);
     tbRow->addStretch();
 
-    // CSV row
+    // ── CSV Track Row ────────────────────────────────────────────────────
+    // Row 1: Load + IMEI selection + status
     auto* csvRow = new QHBoxLayout; csvRow->setSpacing(5);
     m_btnLoadCSV = new QPushButton("📂 Load CSV Track");
     m_btnLoadCSV->setStyleSheet("background:#7C3AED;color:#fff;border-radius:6px;padding:5px 10px;font-weight:600;");
-    m_csvImeiCombo = new QComboBox; m_csvImeiCombo->setFixedWidth(200); m_csvImeiCombo->setToolTip("Target IMEI for CSV track");
-    auto* btnApply = new QPushButton("▶ Apply to IMEI");
+    m_csvImeiCombo = new QComboBox;
+    m_csvImeiCombo->setFixedWidth(200); m_csvImeiCombo->setToolTip("Target IMEI for CSV track");
+    auto* btnApply = new QPushButton("↗ Assign to Device");
     btnApply->setStyleSheet("background:#10B981;color:#fff;border-radius:6px;padding:5px 10px;font-weight:600;");
-    m_csvStatusLabel = new QLabel("No CSV loaded"); m_csvStatusLabel->setStyleSheet("color:#94A3B8;font-size:11px;");
-    connect(m_btnLoadCSV,&QPushButton::clicked,this,&SimulatorWindow::onLoadCSV);
-    connect(btnApply,    &QPushButton::clicked,this,&SimulatorWindow::onCsvAssignImei);
-    csvRow->addWidget(m_btnLoadCSV); csvRow->addWidget(new QLabel("→ IMEI:"));
-    csvRow->addWidget(m_csvImeiCombo); csvRow->addWidget(btnApply);
-    csvRow->addWidget(m_csvStatusLabel); csvRow->addStretch();
+    m_csvStatusLabel = new QLabel("No CSV loaded");
+    m_csvStatusLabel->setStyleSheet("color:#94A3B8;font-size:11px;");
+    m_csvProgressLabel = new QLabel("");
+    m_csvProgressLabel->setStyleSheet("color:#3B82F6;font-size:11px;font-weight:700;min-width:100px;");
+    connect(m_btnLoadCSV, &QPushButton::clicked, this, &SimulatorWindow::onLoadCSV);
+    connect(btnApply,     &QPushButton::clicked, this, &SimulatorWindow::onCsvAssignImei);
+    csvRow->addWidget(m_btnLoadCSV);
+    csvRow->addWidget(new QLabel("→ IMEI:"));
+    csvRow->addWidget(m_csvImeiCombo);
+    csvRow->addWidget(btnApply);
+    csvRow->addWidget(m_csvStatusLabel);
+    csvRow->addWidget(m_csvProgressLabel);
+    csvRow->addStretch();
+
+    // Row 2: Loop controls + interval
+    auto* loopRow = new QHBoxLayout; loopRow->setSpacing(5);
+
+    m_btnCsvLoop = new QPushButton("🔁 Loop: ON");
+    m_btnCsvLoop->setCheckable(true);
+    m_btnCsvLoop->setChecked(true);
+    m_btnCsvLoop->setFixedWidth(110);
+    m_btnCsvLoop->setStyleSheet(
+        "QPushButton{background:#0F172A;color:#94A3B8;border:1.5px solid #334155;"
+        "border-radius:6px;padding:4px 10px;font-weight:700;font-size:12px;}"
+        "QPushButton:checked{background:#7C3AED;color:#fff;border-color:#6D28D9;}"
+        "QPushButton:hover{background:#1e293b;color:#e2e8f0;}");
+    connect(m_btnCsvLoop, &QPushButton::toggled, this, [this](bool on) {
+        m_btnCsvLoop->setText(on ? "🔁 Loop: ON" : "🔁 Loop: OFF");
+        // Apply loop flag to all vehicles with active CSV
+        for (auto& v : m_vehicles)
+            if (v.csvIdx >= 0) v.csvLoopOn = on;
+        appendLog(on ? "🔁 CSV loop ENABLED — will repeat forever"
+                     : "▶ CSV loop DISABLED — plays once then stops", "#7C3AED");
+    });
+
+    m_btnCsvStart = new QPushButton("▶ Start CSV");
+    m_btnCsvStart->setStyleSheet(
+        "background:#10B981;color:#fff;border-radius:6px;padding:4px 12px;font-weight:700;");
+    connect(m_btnCsvStart, &QPushButton::clicked, this, [this]() {
+        // Apply CSV to selected/all devices and start simulation
+        if (m_csvTrack.isEmpty()) {
+            appendLog("⚠️ Load a CSV file first", "#F59E0B"); return;
+        }
+        QString imei = m_csvImeiCombo ? m_csvImeiCombo->currentData().toString() : "";
+        if (!imei.isEmpty()) {
+            // Apply to specific IMEI
+            for (auto& v : m_vehicles) {
+                if (v.imei == imei) {
+                    applyCsvToVehicle(v, m_csvTrack);
+                    v.csvLoopOn = m_btnCsvLoop ? m_btnCsvLoop->isChecked() : true;
+                    appendLog(QString("▶ CSV started → %1 [%2 pts, loop=%3]")
+                        .arg(v.imei).arg(m_csvTrack.size())
+                        .arg(v.csvLoopOn?"ON":"OFF"), "#10B981");
+                    break;
+                }
+            }
+        } else {
+            // Apply to ALL vehicles
+            for (auto& v : m_vehicles) {
+                applyCsvToVehicle(v, m_csvTrack);
+                v.csvLoopOn = m_btnCsvLoop ? m_btnCsvLoop->isChecked() : true;
+            }
+            appendLog(QString("▶ CSV started → all %1 devices [%2 pts, loop=%3]")
+                .arg(m_vehicles.size()).arg(m_csvTrack.size())
+                .arg((m_btnCsvLoop&&m_btnCsvLoop->isChecked())?"ON":"OFF"), "#10B981");
+        }
+        if (!m_running) onStartAll();
+        updateTable();
+    });
+
+    m_btnCsvStop = new QPushButton("⏹ Stop CSV");
+    m_btnCsvStop->setStyleSheet(
+        "background:#EF4444;color:#fff;border-radius:6px;padding:4px 12px;font-weight:700;");
+    connect(m_btnCsvStop, &QPushButton::clicked, this, [this]() {
+        // Clear CSV from all vehicles
+        for (auto& v : m_vehicles) {
+            v.csvIdx   = -1;
+            v.csvLoopOn = true;
+            v.csvTrack.clear();
+            v.speed    = 0;
+            v.status   = "idle";
+        }
+        if (m_csvProgressLabel) m_csvProgressLabel->setText("");
+        updateTable();
+        appendLog("⏹ CSV stopped on all devices", "#EF4444");
+    });
+
+    auto* lblInterval = new QLabel("Interval:");
+    m_csvIntervalSpin = new QSpinBox;
+    m_csvIntervalSpin->setRange(1, 60);
+    m_csvIntervalSpin->setValue(m_intervalSpin ? m_intervalSpin->value() : 5);
+    m_csvIntervalSpin->setSuffix(" s/pt");
+    m_csvIntervalSpin->setFixedWidth(80);
+    m_csvIntervalSpin->setToolTip("How many seconds between each CSV point being sent");
+
+    auto* lblLoopInfo = new QLabel("← One point sent per tick interval");
+    lblLoopInfo->setStyleSheet("color:#64748B;font-size:11px;");
+
+    loopRow->addWidget(m_btnCsvLoop);
+    loopRow->addWidget(m_btnCsvStart);
+    loopRow->addWidget(m_btnCsvStop);
+    loopRow->addWidget(new QWidget); // spacer
+    loopRow->addWidget(lblInterval);
+    loopRow->addWidget(m_csvIntervalSpin);
+    loopRow->addWidget(lblLoopInfo);
+    loopRow->addStretch();
 
     vl->addLayout(tbRow);
     vl->addLayout(csvRow);
+    vl->addLayout(loopRow);
+
+    // ── Debug / Sample Location Buttons ─────────────────────────────────
+    // Hard-coded world landmarks — click to instantly send a one-shot packet
+    // to the server so you can verify lat/lon decoding in any region.
+    auto* dbgBox = new QGroupBox("🌍 Debug Locations — one-click world landmarks");
+    dbgBox->setStyleSheet(
+        "QGroupBox{font-size:11px;font-weight:700;color:#64748B;"
+        "border:1px solid #334155;border-radius:6px;margin-top:6px;padding:4px 6px;}"
+        "QGroupBox::title{subcontrol-origin:margin;left:8px;}");
+    auto* dbgRow = new QHBoxLayout(dbgBox);
+    dbgRow->setSpacing(4); dbgRow->setContentsMargins(4,2,4,2);
+
+    struct DebugLoc { const char* label; double lat; double lon; const char* color; };
+    static const DebugLoc DEBUG_LOCS[] = {
+        { "📍 Bengaluru",         13.17079,  77.56438,  "#7C3AED" },  // Karnataka, India
+        { "🇦🇪 Dubai",           25.20484,  55.27078,  "#F59E0B" },  // Burj Khalifa
+        { "🇬🇧 London",         51.50074,  -0.12462,  "#3B82F6" },  // Big Ben
+        { "🇨🇦 Toronto",        43.65107, -79.34727,  "#10B981" },  // CN Tower area
+        { "🇺🇸 New York",       40.71280, -74.00597,  "#EF4444" },  // Lower Manhattan
+        { "🇸🇬 Singapore",       1.35209, 103.81984,  "#06B6D4" },  // CBD
+        { "🇦🇺 Sydney",        -33.86785, 151.20732,  "#8B5CF6" },  // Opera House
+    };
+
+    for (const auto& loc : DEBUG_LOCS) {
+        auto* btn = new QPushButton(QString::fromUtf8(loc.label));
+        btn->setStyleSheet(QString(
+            "QPushButton{background:%1;color:#fff;border-radius:5px;"
+            "padding:3px 8px;font-size:11px;font-weight:700;}"
+            "QPushButton:hover{opacity:0.85;}").arg(loc.color));
+        double capLat = loc.lat, capLon = loc.lon;
+
+        btn->setToolTip(QString("Send one location packet: lat=%1 lon=%2")
+                        .arg(capLat, 0, 'f', 5).arg(capLon, 0, 'f', 5));
+
+        connect(btn, &QPushButton::clicked, this, [this, capLat, capLon, loc]() {
+            // Send a single location packet to ALL connected GT06N devices
+            // with coordinates overridden to this debug point
+            int sent = 0;
+            for (const auto& v : m_vehicles) {
+                // connKey = "imei:proto" — use per-vehicle protocol
+                const QString ck = v.imei + ":" + QString::number(v.gps_proto, 16);
+                GT06NConn* c = m_gt06nConns.value(ck, nullptr);
+                if (!c || !c->socket ||
+                    c->socket->state() != QAbstractSocket::ConnectedState ||
+                    !c->loggedIn) continue;
+                VehicleState dbgV = v;
+                dbgV.lat = capLat;
+                dbgV.lon = capLon;
+                dbgV.speed = 0;
+                dbgV.heading = 0;
+                dbgV.satellites = 10;
+                // Use the correct protocol for this connection
+                QByteArray pkt = (c->proto == 0x22)
+                    ? buildGT06NLocation22(dbgV, c->sn++)
+                    : buildGT06NLocation(dbgV, "", c->sn++);
+                c->socket->write(pkt);
+                sent++;
+            }
+            const QString ts = QDateTime::currentDateTime().toString("hh:mm:ss");
+            appendLog(QString("[%1] 🌍 Debug: lat=%2 lon=%3 → %4 device(s) — check server map")
+                .arg(ts)
+                .arg(capLat, 0, 'f', 5)
+                .arg(capLon, 0, 'f', 5)
+                .arg(sent), "#F59E0B");
+            if (sent == 0)
+                appendLog("⚠️ No connected devices — start simulation first", "#EF4444");
+        });
+        dbgRow->addWidget(btn);
+    }
+    dbgRow->addStretch();
+    vl->addWidget(dbgBox);
 
     // Splitter: table + right panel
     auto* split = new QSplitter(Qt::Horizontal);
@@ -606,7 +861,8 @@ void SimulatorWindow::onTick() {
             auto& v=m_vehicles[i];
             // If "Send Selected Only" is ON, skip unselected rows
             if(selectedOnly && !v.selected) continue;
-            if(!v.engineOn && !v.immobilised) continue;
+            // Allow CSV replay regardless of engineOn (CSV controls ignition row-by-row)
+            if(!v.engineOn && !v.immobilised && v.csvIdx<0) continue;
             moveVehicle(v);
             QString thisAlarm = alarm;
             if(v.panicActive)     thisAlarm="panic";
@@ -638,12 +894,15 @@ void SimulatorWindow::moveVehicle(VehicleState& v) {
     // CSV replay mode
     if(v.csvIdx>=0 && !v.csvTrack.isEmpty()) {
         if(v.csvIdx>=v.csvTrack.size()){
-            if(v.csvLoop) v.csvIdx=0;
+            if(v.csvLoopOn) v.csvIdx=0;   // loop if toggle is ON
             else { v.csvIdx=-1; v.speed=0; v.status="idle"; return; }
         }
         const CsvPoint& pt=v.csvTrack[v.csvIdx];
         v.lat=pt.lat; v.lon=pt.lon; v.speed=pt.speed; v.heading=pt.heading;
-        v.engineOn=pt.ignition;
+        // Don't permanently set engineOn from CSV — would block next tick.
+        // engineOn stays true during replay; ignition is encoded in HB packet.
+        v.engineOn = true;   // keep vehicle alive for tick
+        v.gpsFixed = (pt.lat != 0.0 || pt.lon != 0.0);
         if(!pt.alarm.isEmpty()) v.status="alarm";
         else v.status=v.speed>2?v.speed>85?"alarm":"online":"idle";
         v.odometer+=(v.speed*(m_intervalSpin->value()))/3600.0;
@@ -718,101 +977,171 @@ void SimulatorWindow::sendPacket(const VehicleState& v, const QString& alarm) {
 // ═══════════════════════════════════════════════════════════════
 
 // CRC-16/ITU (x.25) — same polynomial used by GT06 devices
+// ═══════════════════════════════════════════════════════════════════════
+// GT06 PROTOCOL IMPLEMENTATION — strictly per Concox GT06 spec v1.8
+//
+// Packet types implemented:
+//   0x01  Login        (IMEI → server, expects ACK)
+//   0x12  Location     (GPS+LBS combined, 36 bytes)
+//   0x13  Heartbeat    (status info, 15 bytes)
+//   0x15  String reply (terminal→server response to 0x80 command)
+//
+// CRC: CRC-ITU lookup-table algorithm per Appendix A of spec
+// All lengths, offsets and bit fields verified against spec examples.
+// ═══════════════════════════════════════════════════════════════════════
+
+// ── CRC-ITU lookup table (Appendix A of spec) ────────────────────────
+static const quint16 GT06_CRC_TABLE[256] = {
+    0x0000,0x1189,0x2312,0x329B,0x4624,0x57AD,0x6536,0x74BF,
+    0x8C48,0x9DC1,0xAF5A,0xBED3,0xCA6C,0xDBE5,0xE97E,0xF8F7,
+    0x1081,0x0108,0x3393,0x221A,0x56A5,0x472C,0x75B7,0x643E,
+    0x9CC9,0x8D40,0xBFDB,0xAE52,0xDAED,0xCB64,0xF9FF,0xE876,
+    0x2102,0x308B,0x0210,0x1399,0x6726,0x76AF,0x4434,0x55BD,
+    0xAD4A,0xBCC3,0x8E58,0x9FD1,0xEB6E,0xFAE7,0xC87C,0xD9F5,
+    0x3183,0x200A,0x1291,0x0318,0x77A7,0x662E,0x54B5,0x453C,
+    0xBDCB,0xAC42,0x9ED9,0x8F50,0xFBEF,0xEA66,0xD8FD,0xC974,
+    0x4204,0x538D,0x6116,0x709F,0x0420,0x15A9,0x2732,0x36BB,
+    0xCE4C,0xDFC5,0xED5E,0xFCD7,0x8868,0x99E1,0xAB7A,0xBAF3,
+    0x5285,0x430C,0x7197,0x601E,0x14A1,0x0528,0x37B3,0x263A,
+    0xDECD,0xCF44,0xFDDF,0xEC56,0x98E9,0x8960,0xBBFB,0xAA72,
+    0x6306,0x728F,0x4014,0x519D,0x2522,0x34AB,0x0630,0x17B9,
+    0xEF4E,0xFEC7,0xCC5C,0xDDD5,0xA96A,0xB8E3,0x8A78,0x9BF1,
+    0x7387,0x620E,0x5095,0x411C,0x35A3,0x242A,0x16B1,0x0738,
+    0xFFCF,0xEE46,0xDCDD,0xCD54,0xB9EB,0xA862,0x9AF9,0x8B70,
+    0x8408,0x9581,0xA71A,0xB693,0xC22C,0xD3A5,0xE13E,0xF0B7,
+    0x0840,0x19C9,0x2B52,0x3ADB,0x4E64,0x5FED,0x6D76,0x7CFF,
+    0x9489,0x8500,0xB79B,0xA612,0xD2AD,0xC324,0xF1BF,0xE036,
+    0x18C1,0x0948,0x3BD3,0x2A5A,0x5EE5,0x4F6C,0x7DF7,0x6C7E,
+    0xA50A,0xB483,0x8618,0x9791,0xE32E,0xF2A7,0xC03C,0xD1B5,
+    0x2942,0x38CB,0x0A50,0x1BD9,0x6F66,0x7EEF,0x4C74,0x5DFD,
+    0xB58B,0xA402,0x9699,0x8710,0xF3AF,0xE226,0xD0BD,0xC134,
+    0x39C3,0x284A,0x1AD1,0x0B58,0x7FE7,0x6E6E,0x5CF5,0x4D7C,
+    0xC60C,0xD785,0xE51E,0xF497,0x8028,0x91A1,0xA33A,0xB2B3,
+    0x4A44,0x5BCD,0x6956,0x78DF,0x0C60,0x1DE9,0x2F72,0x3EFB,
+    0xD68D,0xC704,0xF59F,0xE416,0x90A9,0x8120,0xB3BB,0xA232,
+    0x5AC5,0x4B4C,0x79D7,0x685E,0x1CE1,0x0D68,0x3FF3,0x2E7A,
+    0xE70E,0xF687,0xC41C,0xD595,0xA12A,0xB0A3,0x8238,0x93B1,
+    0x6B46,0x7ACF,0x4854,0x59DD,0x2D62,0x3CEB,0x0E70,0x1FF9,
+    0xF78F,0xE606,0xD49D,0xC514,0xB1AB,0xA022,0x92B9,0x8330,
+    0x7BC7,0x6A4E,0x58D5,0x495C,0x3DE3,0x2C6A,0x1EF1,0x0F78
+};
+
+// CRC over bytes [from,to) — wraps whole body array
 static quint16 gt06Crc(const QByteArray& d, int from, int to) {
-    quint16 crc = 0xFFFF;
-    for (int i = from; i < to; i++) {
-        crc ^= (quint8)d[i] << 8;
-        for (int j = 0; j < 8; j++)
-            crc = (crc & 0x8000) ? (crc << 1) ^ 0x1021 : crc << 1;
-    }
-    return crc & 0xFFFF;
+    quint16 fcs = 0xFFFF;
+    for (int i = from; i < to; i++)
+        fcs = (fcs >> 8) ^ GT06_CRC_TABLE[(fcs ^ (quint8)d[i]) & 0xFF];
+    return (~fcs) & 0xFFFF;
 }
 
-// LOGIN packet — 78 78 | 11 | 01 | IMEI[8 BCD] | SN[2] | CRC[2] | 0D 0A
-QByteArray SimulatorWindow::buildGT06NLogin(const VehicleState& v, quint16 sn) {
-    // BCD-encode IMEI: prepend '0' so 15 digits → 16 nibbles → 8 bytes
-    QString s = QString("0") + v.imei.left(15).rightJustified(15, '0');
-    QByteArray body;
-    body.append(char(0x11));       // length field (17 = body size after this byte + CRC but before 0D0A)
-    body.append(char(0x01));       // protocol: login
-    for (int i = 0; i < 8; i++) {
-        int hi = s[i*2].digitValue(), lo = s[i*2+1].digitValue();
-        if (hi < 0) hi = 0; if (lo < 0) lo = 0;
-        body.append(char((hi << 4) | lo));
-    }
-    body.append(char((sn >> 8) & 0xFF));
-    body.append(char(sn & 0xFF));
-    quint16 crc = gt06Crc(body, 0, body.size());
-    body.append(char((crc >> 8) & 0xFF));
-    body.append(char(crc & 0xFF));
-
+static QByteArray gt06Wrap(const QByteArray& body) {
+    // Prepend 0x78 0x78, append 0x0D 0x0A
     QByteArray pkt;
+    pkt.reserve(body.size() + 4);
     pkt.append(char(0x78)); pkt.append(char(0x78));
     pkt.append(body);
     pkt.append(char(0x0D)); pkt.append(char(0x0A));
     return pkt;
 }
 
-// LOCATION packet — 78 78 | len | proto | datetime[6] | qty | lat[4] | lon[4] | spd | course[2] | cell[7] | alarm | lang | SN[2] | CRC[2] | 0D 0A
+// ── 0x01 LOGIN  (18 bytes total) ─────────────────────────────────────
+// 78 78 | 0D | 01 | IMEI[8 BCD] | SN[2] | CRC[2] | 0D 0A
+// Length = 0x0D = 13 (protocol + 8-byte IMEI + 2-byte SN + 2-byte CRC)
+QByteArray SimulatorWindow::buildGT06NLogin(const VehicleState& v, quint16 sn) {
+    // BCD-encode: prepend '0' to get 16 nibbles → 8 bytes
+    QString s = QString("0") + v.imei.left(15).rightJustified(15, '0');
+    QByteArray body;
+    body.append(char(0x0D));        // length = 13
+    body.append(char(0x01));        // protocol: login
+    for (int i = 0; i < 8; i++) {
+        int hi = s[i*2].digitValue(), lo = s[i*2+1].digitValue();
+        body.append(char(((hi<0?0:hi) << 4) | (lo<0?0:lo)));
+    }
+    body.append(char((sn >> 8) & 0xFF));
+    body.append(char( sn       & 0xFF));
+    quint16 crc = gt06Crc(body, 0, body.size());
+    body.append(char((crc >> 8) & 0xFF));
+    body.append(char( crc       & 0xFF));
+    return gt06Wrap(body);          // → 18 bytes total
+}
+
+// ── 0x12 LOCATION  (36 bytes total) ──────────────────────────────────
+// Per spec section 5.2 — GPS + LBS combined packet:
+//
+//  Off  Sz  Field
+//  0-1   2  Start bits (0x78 0x78)
+//  2     1  Length = 0x1F = 31  (proto…serial+CRC)
+//  3     1  Protocol = 0x12
+//  4-9   6  Date/Time (YY MM DD HH mm SS, UTC)
+//  10    1  Sat count (upper nibble=GPS info length=0xC, lower=sat count)
+//  11-14 4  Latitude  (DDMM.MMMM × 30000, uint32 big-endian, absolute)
+//  15-18 4  Longitude (DDMM.MMMM × 30000, uint32 big-endian, absolute)
+//  19    1  Speed (km/h)
+//  20-21 2  Course & Status (uint16 big-endian — see bit layout below)
+//  22-23 2  MCC (Mobile Country Code, big-endian)
+//  24    1  MNC (Mobile Network Code)
+//  25-26 2  LAC (Location Area Code)
+//  27-29 3  Cell ID
+//  30-31 2  Serial Number
+//  32-33 2  CRC-ITU (over bytes [2..31], i.e. Length through Serial)
+//  34-35 2  Stop bits (0x0D 0x0A)
+//
+// Course/Status word bit layout (BYTE_1 = high byte, BYTE_2 = low byte):
+//   Bit 13 (0x2000): 0 = real-time GPS,  1 = differential
+//   Bit 12 (0x1000): 1 = GPS positioned (valid fix)
+//   Bit 11 (0x0800): 0 = East,           1 = West
+//   Bit 10 (0x0400): 1 = North,          0 = South
+//   Bits 9-0 (0x03FF): heading 0-359°
+//
+// Verified against spec example 5.2.2:
+//   0x154C → bit12=1(valid), bit11=0(East), bit10=1(North), course=332° ✓
 QByteArray SimulatorWindow::buildGT06NLocation(const VehicleState& v, const QString& alarm, quint16 sn) {
     QDateTime now = QDateTime::currentDateTimeUtc();
 
-    // ─────────────────────────────────────────────────────────────
-    // GT06N lat/lon encoding:
-    //   Step 1: convert decimal degrees → DDMM.MMMM
-    //           e.g. 12.9716° → 12°58.296' → 1258.296
-    //   Step 2: multiply by 30,000 → uint32
-    //           1258.296 × 30000 = 37,748,880
-    //   The server decodes: raw/30000 → DDMM.MMMM → DD + MM/60 → decimal
-    // ─────────────────────────────────────────────────────────────
-    auto toDDMM30000 = [](double decDeg) -> quint32 {
-        double absDeg = qAbs(decDeg);
-        int    d = int(absDeg);
-        double m = (absDeg - d) * 60.0;
-        double ddmm = d * 100.0 + m;   // DDMM.MMMM
-        return quint32(ddmm * 30000.0);
+    // ── Lat/Lon → degrees × 1800000  ────────────────────────────────────
+    // CONFIRMED by screenshot analysis (2026-03-21):
+    //   Simulator sent lat=13.17079 using DDMM×30000 → raw=39,307,422
+    //   Server decoded: 39,307,422 / 1,800,000 = 21.837° (WRONG)
+    //
+    //   Using degrees×1800000 → raw=23,707,422
+    //   Server decoded: 23,707,422 / 1,800,000 = 13.17079° (CORRECT ✓)
+    //
+    // fleetcop.com decode formula: raw / 1,800,000 = decimal_degrees
+    // Therefore: raw = decimal_degrees × 1,800,000
+    //
+    // This also equals: total_minutes × 30,000
+    //   (since degrees×1800000 = degrees×60×30000 = total_minutes×30000)
+    auto toRaw1800k = [](double decDeg) -> quint32 {
+        return quint32(qAbs(decDeg) * 1800000.0);
     };
-    quint32 latV = toDDMM30000(v.lat);
-    quint32 lonV = toDDMM30000(v.lon);
+    const quint32 latV = toRaw1800k(v.lat);
+    const quint32 lonV = toRaw1800k(v.lon);
 
-    // Course/status word:
-    //   Bits 9-0  : heading 0-360°
-    //   Bit 10    : lat hemisphere  (0 = North, 1 = South)
-    //   Bit 11    : lon hemisphere  (0 = East,  1 = West)
-    //   Bit 12    : GPS positioned  (1 = valid fix)
-    quint16 course = quint16(qAbs(v.heading)) & 0x03FF;
-    if (v.lat < 0) course |= 0x0400;   // South
-    if (v.lon < 0) course |= 0x0800;   // West
-    course |= 0x1000;                   // GPS fix valid
-
-    // Protocol byte: 0x12 = normal location, 0x26 = alarm event
-    quint8 proto = alarm.isEmpty() ? 0x12 : 0x26;
-
-    // Alarm type byte
-    quint8 alarmByte = 0x00;
-    if      (alarm == "panic"         ) alarmByte = 0x01;
-    else if (alarm == "overspeed"     ) alarmByte = 0x03;
-    else if (alarm == "geofence_entry") alarmByte = 0x06;
-    else if (alarm == "geofence_exit" ) alarmByte = 0x07;
-    else if (alarm == "tow_away"      ) alarmByte = 0x0A;
-    else if (!alarm.isEmpty()         ) alarmByte = 0x0F;
-
-    // ACC/Ignition status byte (sent in the "language" field position
-    // and also embedded in course for servers that parse it):
-    // We use the standard 0x01 = English in the lang byte below,
-    // and encode ignition into the status info block.
-    quint8 accByte = 0x01; // language = English (standard)
+    // ── Course & Status word ──────────────────────────────────────────
+    quint16 course = quint16(qAbs(v.heading)) & 0x03FF;  // bits 9-0 = heading
+    course |= 0x1000;                      // bit 12 = GPS positioned (valid)
+    // bit 13 stays 0  = real-time GPS (not differential)
+    if (v.lon < 0.0)  course |= 0x0800;  // bit 11 = West  (0=East)
+    if (v.lat >= 0.0) course |= 0x0400;  // bit 10 = North (0=South)
 
     QByteArray body;
-    body.append(char(0x00));       // length — fixed at end
-    body.append(char(proto));
+    body.reserve(30);
+
+    // 1. Protocol ID (Use 0x12 - much more stable for Traccar)
+    body.append(char(0x12));
+
+    // 2. Date and Time (6 bytes)
     body.append(char(now.date().year() % 100));
     body.append(char(now.date().month()));
     body.append(char(now.date().day()));
     body.append(char(now.time().hour()));
     body.append(char(now.time().minute()));
     body.append(char(now.time().second()));
-    body.append(char(0xC0 | qMin(v.satellites, 12)));  // qty_gps: 11xxxxxx = real-time
+
+    // 3. GPS Info (Combined byte: 0xC0 | Satellites)
+    body.append(char(0xC0 | (quint8(v.satellites) & 0x0F)));
+
+    // 4. Coordinates (Bengaluru - Aligned at index 8)
     body.append(char((latV >> 24) & 0xFF));
     body.append(char((latV >> 16) & 0xFF));
     body.append(char((latV >>  8) & 0xFF));
@@ -821,98 +1150,219 @@ QByteArray SimulatorWindow::buildGT06NLocation(const VehicleState& v, const QStr
     body.append(char((lonV >> 16) & 0xFF));
     body.append(char((lonV >>  8) & 0xFF));
     body.append(char( lonV        & 0xFF));
+
+    // 5. Speed & Course/Status
     body.append(char(quint8(qMin(int(v.speed), 255))));
     body.append(char((course >> 8) & 0xFF));
     body.append(char( course       & 0xFF));
-    // GSM cell info (placeholder — India MCC=404, MNC=05)
-    body.append(char(0x01)); body.append(char(0x94)); // MCC = 0x0194 = 404 India
-    body.append(char(0x05));                           // MNC = 5 (Airtel)
-    body.append(char(0x12)); body.append(char(0xCF)); // LAC
-    body.append(char(0x00)); body.append(char(0x5A)); body.append(char(0x14)); // CellID
-    body.append(char(alarmByte));   // alarm type
-    body.append(char(accByte));     // language / status
+
+    // 6. LBS Block (8 bytes total - Matches Traccar 0x12 expectations)
+    body.append(char(0x01)); body.append(char(0x94));     // MCC (404)
+    body.append(char(0x2D));                              // MNC (45 - MUST BE 1 BYTE)
+    body.append(char(0x69)); body.append(char(0x22));     // LAC
+    body.append(char(0x00));                              // Cell ID High
+    body.append(char(0xCF)); body.append(char(0xAA));     // Cell ID Low
+
+    // 7. Serial Number
     body.append(char((sn >> 8) & 0xFF));
     body.append(char( sn       & 0xFF));
 
-    // Fix length byte = bytes from proto to end-of-SN + 2 (for CRC)
-    body[0] = char(body.size() - 1 + 2);
+    // 1. Final Wrap
+    QByteArray packet;
+    packet.append(char(0x78)); packet.append(char(0x78)); // Start Bits
+    packet.append(char(body.size() + 2));                 // Length Byte (0x1F)
+    packet.append(body);                                  // Includes Serial Number
 
-    quint16 crc = gt06Crc(body, 0, body.size());
-    body.append(char((crc >> 8) & 0xFF));
-    body.append(char( crc       & 0xFF));
+    // 2. Calculate CRC strictly from index 2 (Length byte) to index 28 (Serial Number)
+    // Calculation length is: (Length Byte [1]) + (Protocol [1]) + (Time [6]) + (GPS/Sat [1]) +
+    // (Lat [4]) + (Lon [4]) + (Speed [1]) + (Course [2]) + (LBS [8]) + (SN [2]) = 30 bytes total.
+    const quint16 result = gt06Crc(packet, 2, packet.size() - 2);
 
-    QByteArray pkt;
-    pkt.append(char(0x78)); pkt.append(char(0x78));
-    pkt.append(body);
-    pkt.append(char(0x0D)); pkt.append(char(0x0A));
-    return pkt;
+    packet.append(char((result >> 8) & 0xFF));
+    packet.append(char( result       & 0xFF));
+    packet.append(char(0x0D)); packet.append(char(0x0A));
+    appendLog(packet.toHex(), "#F97316");
+
+
+    return  packet;    // → 36 bytes total
 }
 
-// HEARTBEAT packet — 78 78 | len | 23 | status | voltage | SN[2] | CRC[2] | 0D 0A
-// Status byte bit layout:
-//   Bit 0: defence/immobilise   (1 = armed)
-//   Bit 1: ACC / Ignition       (1 = ON)
-//   Bit 2: charging             (1 = charging)
-//   Bit 3: GPS signal active    (1 = tracking)
-//   Bit 4: alarm active         (1 = alarm)
-//   Bit 5-7: spare
-QByteArray SimulatorWindow::buildGT06NHeartbeat(quint16 sn, bool ignitionOn, bool gpsFixed, bool immobilised) {
-    quint8 status = 0;
-    if (immobilised) status |= (1 << 0);  // defence / engine cut
-    if (ignitionOn ) status |= (1 << 1);  // ACC on
-    if (gpsFixed   ) status |= (1 << 3);  // GPS tracking
+// ── 0x22 GPS-ONLY LOCATION PACKET (28 bytes total) ───────────────────────
+// Used for port 6023 (fleetcop.com and similar servers).
+// Same lat/lon/course encoding as 0x12 but WITHOUT LBS cell tower data.
+//
+// Packet layout:
+//  [0-1]   78 78       start
+//  [2]     0x17 (23)   length = proto(1)+dt(6)+sat(1)+lat(4)+lon(4)+spd(1)+crs(2)+SN(2)+CRC(2)
+//  [3]     0x22        protocol
+//  [4-9]   YY MM DD HH mm SS
+//  [10]    0xC_        sat count
+//  [11-14] lat (degrees × 1,800,000, big-endian)
+//  [15-18] lon (degrees × 1,800,000, big-endian)
+//  [19]    speed
+//  [20-21] course+status word
+//  [22-23] serial number
+//  [24-25] CRC-ITU
+//  [26-27] 0D 0A
+QByteArray SimulatorWindow::buildGT06NLocation22(const VehicleState& v, quint16 sn) {
+    QDateTime now = QDateTime::currentDateTimeUtc();
+
+    // Lat/Lon: degrees × 1,800,000 (confirmed working on fleetcop.com)
+    auto toRaw = [](double d) -> quint32 { return quint32(qAbs(d) * 1800000.0); };
+    const quint32 latV = toRaw(v.lat);
+    const quint32 lonV = toRaw(v.lon);
+
+    // Course & Status word (same bit layout as 0x12)
+    quint16 course = quint16(qAbs(v.heading)) & 0x03FF;
+    course |= 0x1000;                      // bit12 = GPS positioned
+    if (v.lon < 0.0)  course |= 0x0800;  // bit11 = West
+    if (v.lat >= 0.0) course |= 0x0400;  // bit10 = North
 
     QByteArray body;
-    body.append(char(0x05));           // length (5 bytes after this)
-    body.append(char(0x23));           // protocol: heartbeat
-    body.append(char(status));         // ACC + GPS + defence status
-    body.append(char(0x04));           // voltage level: 4 = full (12.4V range)
+    body.reserve(24);   // 24 bytes: length byte through CRC
+
+    body.append(char(0x17));                              // Length = 23
+    body.append(char(0x22));                              // Protocol: GPS-only
+    body.append(char(now.date().year() % 100));
+    body.append(char(now.date().month()));
+    body.append(char(now.date().day()));
+    body.append(char(now.time().hour()));
+    body.append(char(now.time().minute()));
+    body.append(char(now.time().second()));
+    body.append(char(0xC0 | qMin(v.satellites, 15)));    // sat byte
+    body.append(char((latV >> 24) & 0xFF));
+    body.append(char((latV >> 16) & 0xFF));
+    body.append(char((latV >>  8) & 0xFF));
+    body.append(char( latV        & 0xFF));
+    body.append(char((lonV >> 24) & 0xFF));
+    body.append(char((lonV >> 16) & 0xFF));
+    body.append(char((lonV >>  8) & 0xFF));
+    body.append(char( lonV        & 0xFF));
+    body.append(char(quint8(qMin(int(v.speed), 255))));  // speed
+    body.append(char((course >> 8) & 0xFF));
+    body.append(char( course       & 0xFF));
+    body.append(char((sn >> 8) & 0xFF));                  // serial number
+    body.append(char( sn       & 0xFF));
+    const quint16 crc = gt06Crc(body, 0, body.size());
+    body.append(char((crc >> 8) & 0xFF));
+    body.append(char( crc       & 0xFF));
+
+    return gt06Wrap(body);    // → 28 bytes total
+}
+
+// ── 0x13 HEARTBEAT  (15 bytes total) ─────────────────────────────────
+// Per spec section 5.4:
+//
+//  Off  Sz  Field
+//  0-1   2  Start bits (0x78 0x78)
+//  2     1  Length = 0x0A = 10  (proto…serial+CRC)
+//  3     1  Protocol = 0x13
+//  4     1  Terminal Information (bit layout below)
+//  5     1  Voltage Level (0-6)
+//  6     1  GSM Signal Strength (0-4)
+//  7-8   2  Alarm/Language (0x00 0x02 = no alarm, English)
+//  9-10  2  Serial Number
+//  11-12 2  CRC-ITU (over bytes [2..10])
+//  13-14 2  Stop bits (0x0D 0x0A)
+//
+// Terminal Information byte:
+//   Bit 7: 0=oil connected,   1=oil cut (immobilised)
+//   Bit 6: 1=GPS tracking ON, 0=off
+//   Bit 5-3: 000=normal, 100=SOS, 011=LowBat, 010=PowerCut, 001=Shock
+//   Bit 2: 1=charging
+//   Bit 1: 1=ACC high (ignition ON)
+//   Bit 0: 1=activated
+QByteArray SimulatorWindow::buildGT06NHeartbeat(quint16 sn, bool ignitionOn, bool gpsFixed, bool immobilised) {
+    quint8 termInfo = 0;
+    if (immobilised)  termInfo |= (1 << 7);   // bit7: oil cut
+    if (gpsFixed)     termInfo |= (1 << 6);   // bit6: GPS tracking ON
+    // bits 5-3: 000 = normal (no alarm)
+    if (ignitionOn)   termInfo |= (1 << 1);   // bit1: ACC high
+    termInfo |= (1 << 0);                      // bit0: activated
+
+    QByteArray body;
+    body.append(char(0x0A));                   // Length = 10
+    body.append(char(0x13));                   // Protocol: heartbeat/status
+    body.append(char(termInfo));               // Terminal info
+    body.append(char(0x04));                   // Voltage level: 4 = medium-high
+    body.append(char(0x03));                   // GSM signal: 3 = good
+    body.append(char(0x00)); body.append(char(0x02)); // Alarm=none, Language=English
     body.append(char((sn >> 8) & 0xFF));
     body.append(char( sn       & 0xFF));
     quint16 crc = gt06Crc(body, 0, body.size());
     body.append(char((crc >> 8) & 0xFF));
     body.append(char( crc       & 0xFF));
-
-    QByteArray pkt;
-    pkt.append(char(0x78)); pkt.append(char(0x78));
-    pkt.append(body);
-    pkt.append(char(0x0D)); pkt.append(char(0x0A));
-    return pkt;
+    return gt06Wrap(body);    // → 15 bytes total
 }
+
+// ── 0x15 STRING REPLY — terminal responds to 0x80 command ───────────
+// Used to ACK engine cut (DYD) / restore (HFYD) commands from server
+QByteArray SimulatorWindow::buildGT06NCommandReply(const QByteArray& serverFlagBit,
+                                                    const QString& replyStr, quint16 sn) {
+    QByteArray content = serverFlagBit;             // 4 bytes server flag (echo back)
+    content.append(replyStr.toUtf8());              // ASCII reply
+    content.append(char(0x00)); content.append(char(0x02)); // language = English
+
+    QByteArray body;
+    body.append(char(quint8(1 + content.size() + 2 + 2))); // length byte
+    body.append(char(0x15));                                 // protocol: string reply
+    body.append(char(quint8(content.size())));               // length of command content
+    body.append(content);
+    body.append(char((sn >> 8) & 0xFF));
+    body.append(char( sn       & 0xFF));
+    quint16 crc = gt06Crc(body, 0, body.size());
+    body.append(char((crc >> 8) & 0xFF));
+    body.append(char( crc       & 0xFF));
+    return gt06Wrap(body);
+}
+
 
 // sendGT06N — manages a persistent socket per IMEI:
 //   1st call: connect → send login → wait for ACK → send location
 //   Subsequent calls: just send location on existing socket
 void SimulatorWindow::sendGT06N(VehicleState& v, const QString& alarm) {
-    const QString imei = v.imei;
-    const QString host = m_hostEdit->text();
-    const quint16 port = quint16(m_portSpin->value());
+    const QString imei        = v.imei;
+    const quint8  targetProto = v.gps_proto;  // 0x22 or 0x12 per vehicle
+    const quint16 targetPort  = v.gps_port;   // 6023 or 6015 per vehicle
+    const QString host = m_hostEdit->text();  // single host for all protocols
+    // Connection key = "imei:proto" so same IMEI can be on both servers at once
+    const QString connKey = imei + ":" + QString::number(targetProto, 16);
 
     // Get or create connection record
-    GT06NConn* c = m_gt06nConns.value(imei, nullptr);
+    GT06NConn* c = m_gt06nConns.value(connKey, nullptr);
     if (!c) {
         c = new GT06NConn;
-        m_gt06nConns[imei] = c;
+        c->proto = targetProto;
+        m_gt06nConns[connKey] = c;
     }
 
     // If already connected and logged in → send location immediately
     if (c->loggedIn && c->socket &&
         c->socket->state() == QAbstractSocket::ConnectedState) {
-        QByteArray pkt = buildGT06NLocation(v, alarm, c->sn++);
-        c->socket->write(pkt);
+        // Choose packet: 0x22=GPS-only · 0x12=GPS+LBS · 0xFF=both on same socket
+        if (c->proto == 0xFF) {
+            c->socket->write(buildGT06NLocation22(v, c->sn++));
+            c->socket->write(buildGT06NLocation(v, alarm, c->sn++));
+        } else if (c->proto == 0x22) {
+            c->socket->write(buildGT06NLocation22(v, c->sn++));
+        } else {
+            c->socket->write(buildGT06NLocation(v, alarm, c->sn++));
+        }
+        const QByteArray pkt; // placeholder for log size below
         m_totalPackets++;  // counted here for GT06N
         v.packetsSent++;
         if (m_vehicles.size() <= 20) {
             QString col = alarm.isEmpty()
                 ? (v.status=="idle" ? "#D97706" : "#10B981")
                 : "#DC2626";
-            appendLog(QString("[%1] %2 GT06N 📡 lat=%3 lon=%4 spd=%5 %6 (%7B)")
+            appendLog(QString("[%1] %2 📡 0x%3 lat=%4 lon=%5 spd=%6 %7 (%8B)")
                 .arg(QDateTime::currentDateTime().toString("hh:mm:ss"))
                 .arg(imei.right(6))
+                .arg(c->proto==0xFF ? "22+12" : QString("%1").arg(c->proto,2,16,QChar('0')).toUpper())
                 .arg(v.lat, 0,'f',5).arg(v.lon, 0,'f',5)
                 .arg(v.speed, 0,'f',0)
                 .arg(alarm.isEmpty() ? v.status : alarm.toUpper())
-                .arg(pkt.size()), col);
+                .arg(c->proto==0xFF?"28+36B":"auto"), col);
         }
         return;
     }
@@ -929,101 +1379,163 @@ void SimulatorWindow::sendGT06N(VehicleState& v, const QString& alarm) {
         c->connecting = false;
     }
 
-    c->socket    = new QTcpSocket(this);
-    c->loggedIn  = false;
+    c->socket     = new QTcpSocket(this);
+    c->loggedIn   = false;
     c->connecting = true;
+    c->proto      = targetProto;  // store protocol for this connection
     c->rxBuf.clear();
 
-    appendLog(QString("[%1] %2 GT06N → connecting %3:%4…")
+    const QString protoLabel = (targetProto == 0x22) ? "0x22 GPS-only" : "0x12 GPS+LBS";
+    appendLog(QString("[%1] %2 GT06N → connecting %3:%4 [%5]…")
         .arg(QDateTime::currentDateTime().toString("hh:mm:ss"))
-        .arg(imei.right(6)).arg(host).arg(port), "#0EA5E9");
+        .arg(imei.right(6)).arg(host).arg(targetPort).arg(protoLabel), "#0EA5E9");
 
     // ── connected ─────────────────────────────────────────────
-    connect(c->socket, &QTcpSocket::connected, this, [this, imei]() {
-        gt06nConnected(imei);
+    connect(c->socket, &QTcpSocket::connected, this, [this, connKey]() {
+        gt06nConnected(connKey);
     });
 
     // ── data from server (ACK packets) ────────────────────────
-    connect(c->socket, &QTcpSocket::readyRead, this, [this, imei]() {
-        gt06nDataReady(imei);
+    connect(c->socket, &QTcpSocket::readyRead, this, [this, connKey]() {
+        gt06nDataReady(connKey);
     });
 
     // ── disconnected ──────────────────────────────────────────
-    connect(c->socket, &QTcpSocket::disconnected, this, [this, imei]() {
-        gt06nDisconnected(imei);
+    connect(c->socket, &QTcpSocket::disconnected, this, [this, connKey]() {
+        gt06nDisconnected(connKey);
     });
 
     // ── error ─────────────────────────────────────────────────
     connect(c->socket,
         QOverload<QAbstractSocket::SocketError>::of(&QTcpSocket::errorOccurred),
-        this, [this, imei](QAbstractSocket::SocketError err) {
-            gt06nSocketError(imei, err);
+        this, [this, connKey](QAbstractSocket::SocketError err) {
+            gt06nSocketError(connKey, err);
         });
 
-    c->socket->connectToHost(host, port);
+    c->socket->connectToHost(host, targetPort);
 }
 
 // Called when TCP connection established → send LOGIN packet
-void SimulatorWindow::gt06nConnected(const QString& imei) {
-    GT06NConn* c = m_gt06nConns.value(imei, nullptr);
+void SimulatorWindow::gt06nConnected(const QString& connKey) {
+    GT06NConn* c = m_gt06nConns.value(connKey, nullptr);
     if (!c || !c->socket) return;
     c->connecting = false;
 
-    // Find vehicle for IMEI
+    // Extract IMEI from connKey ("imei:proto")
+    const QString imei = connKey.section(':', 0, 0);
     auto it = std::find_if(m_vehicles.begin(), m_vehicles.end(),
-                            [&](const VehicleState& v){ return v.imei == imei; });
+                           [&](const VehicleState& v){ return v.imei == imei; });
     if (it == m_vehicles.end()) return;
 
     QByteArray loginPkt = buildGT06NLogin(*it, c->sn++);
     c->socket->write(loginPkt);
 
-    appendLog(QString("[%1] %2 GT06N ✅ connected → login sent (%3B) [%4]")
+    const QString protoTag = (c->proto==0x22) ? "0x22" : "0x12";
+    appendLog(QString("[%1] %2 GT06N ✅ connected [%3] → login sent (%4B)")
         .arg(QDateTime::currentDateTime().toString("hh:mm:ss"))
-        .arg(imei.right(6))
-        .arg(loginPkt.size())
-        .arg(QString(loginPkt.toHex(' ').toUpper())), "#10B981");
+        .arg(imei.right(6)).arg(protoTag).arg(loginPkt.size()), "#10B981");
 }
 
 // Called when server sends data — parse ACKs
-void SimulatorWindow::gt06nDataReady(const QString& imei) {
-    GT06NConn* c = m_gt06nConns.value(imei, nullptr);
+void SimulatorWindow::gt06nDataReady(const QString& connKey) {
+    GT06NConn* c = m_gt06nConns.value(connKey, nullptr);
     if (!c || !c->socket) return;
     c->rxBuf.append(c->socket->readAll());
 
-    // Scan for ACK packets (78 78 ...)
-    while (c->rxBuf.size() >= 4) {
+    // Extract IMEI from connKey ("imei:proto")
+    const QString imei = connKey.section(':', 0, 0);
+
+    // Find and process complete packets (78 78 ...)
+    while (c->rxBuf.size() >= 5) {
+        // Sync to start bytes
         if ((quint8)c->rxBuf[0] != 0x78 || (quint8)c->rxBuf[1] != 0x78) {
-            c->rxBuf.remove(0, 1);  // sync: skip until 78 78
+            c->rxBuf.remove(0, 1);
             continue;
         }
-        int len = (quint8)c->rxBuf[2];
-        int totalExpected = 2 + 1 + len + 2; // start(2) + lenByte(1) + len + end(2)
-        if (c->rxBuf.size() < totalExpected) break; // wait for more data
+        int len      = (quint8)c->rxBuf[2];          // length byte
+        int totalPkt = 2 + 1 + len + 2;              // start(2) + len(1) + len + stop(2)
+        if (c->rxBuf.size() < totalPkt) break;       // wait for more data
 
         quint8 proto = (quint8)c->rxBuf[3];
-        QString hexPkt = c->rxBuf.left(totalExpected).toHex(' ').toUpper();
+        QByteArray pkt = c->rxBuf.left(totalPkt);
+        c->rxBuf.remove(0, totalPkt);
 
+        const QString ts = QDateTime::currentDateTime().toString("hh:mm:ss");
+
+        // ── Login ACK (0x01) — same for both protocols ────────────────
         if (proto == 0x01) {
-            // Login ACK
             c->loggedIn = true;
-            appendLog(QString("[%1] %2 GT06N ✅ LOGIN ACK — stream active [%3]")
-                .arg(QDateTime::currentDateTime().toString("hh:mm:ss"))
-                .arg(imei.right(6)).arg(hexPkt), "#10B981");
-        } else if (proto == 0x12 || proto == 0x26) {
-            appendLog(QString("[%1] %2 GT06N 📥 loc ACK [%3]")
-                .arg(QDateTime::currentDateTime().toString("hh:mm:ss"))
-                .arg(imei.right(6)).arg(hexPkt), "#334155");
-        } else if (proto == 0x23) {
-            appendLog(QString("[%1] %2 GT06N 💓 HB ACK")
-                .arg(QDateTime::currentDateTime().toString("hh:mm:ss"))
-                .arg(imei.right(6)), "#334155");
+            appendLog(QString("[%1] %2 GT06N ✅ LOGIN ACK [%3] → location stream active")
+                .arg(ts).arg(imei.right(6))
+                .arg(c->proto==0x22?"0x22 GPS-only":"0x12 GPS+LBS"), "#10B981");
+
+        // ── Location ACK 0x22 (GPS-only) ─────────────────────────────
+        } else if (proto == 0x22) {
+            appendLog(QString("[%1] %2 📥 0x22 loc ACK")
+                .arg(ts).arg(imei.right(6)), "#334155");
+
+        // ── Location ACK 0x12 (GPS+LBS) ──────────────────────────────
+        } else if (proto == 0x12) {
+            appendLog(QString("[%1] %2 📥 0x12 loc ACK")
+                .arg(ts).arg(imei.right(6)), "#334155");
+
+        // ── Heartbeat ACK (0x13) ─────────────────────────────────────
+        } else if (proto == 0x13) {
+            appendLog(QString("[%1] %2 💓 HB ACK (0x13)")
+                .arg(ts).arg(imei.right(6)), "#334155");
+
+        // ── Engine cut/restore command (0x80) ────────────────────────
+        } else if (proto == 0x80) {
+            if (pkt.size() >= 10) {
+                quint8  cmdLen  = (quint8)pkt[4];
+                QByteArray flagBit = pkt.mid(5, 4);
+                QString cmd;
+                if (pkt.size() >= 5 + 4 + cmdLen)
+                    cmd = QString::fromLatin1(pkt.mid(9, cmdLen - 4)).trimmed();
+                appendLog(QString("[%1] %2 📟 CMD [%3]: %4")
+                    .arg(ts).arg(imei.right(6))
+                    .arg(c->proto==0x22?"0x22":"0x12").arg(cmd), "#F59E0B");
+
+                QString replyStr;
+                bool cutEngine = false, restoreEngine = false;
+                if      (cmd.startsWith("DYD"))  { replyStr="DYD=Success!";  cutEngine=true;     }
+                else if (cmd.startsWith("HFYD")) { replyStr="HFYD=Success!"; restoreEngine=true; }
+                else                             { replyStr=cmd.split(',')[0]+"=OK"; }
+
+                auto it = std::find_if(m_vehicles.begin(), m_vehicles.end(),
+                            [&](const VehicleState& v){ return v.imei==imei; });
+                if (it != m_vehicles.end()) {
+                    if (cutEngine)     { it->immobilised=true;  it->engineOn=false; it->speed=0; }
+                    if (restoreEngine) { it->immobilised=false; it->engineOn=true; }
+                    updateTable();
+                    appendLog(QString("[%1] %2 ✂️ Engine %3 via 0x80 command")
+                        .arg(ts).arg(imei.right(6))
+                        .arg(cutEngine?"CUT":"RESTORED"),
+                        cutEngine?"#EF4444":"#10B981");
+                }
+
+                if (c->loggedIn && c->socket &&
+                    c->socket->state() == QAbstractSocket::ConnectedState) {
+                    quint16 cmdSN = 0;
+                    int snPos = 2 + 1 + len - 4;
+                    if (snPos + 1 < pkt.size())
+                        cmdSN = ((quint8)pkt[snPos]<<8) | (quint8)pkt[snPos+1];
+                    QByteArray reply = buildGT06NCommandReply(flagBit, replyStr, cmdSN);
+                    c->socket->write(reply);
+                    appendLog(QString("[%1] %2 📤 0x15 reply: %3")
+                        .arg(ts).arg(imei.right(6)).arg(replyStr), "#10B981");
+                }
+            }
         }
-        c->rxBuf.remove(0, totalExpected);
     }
 }
 
-void SimulatorWindow::gt06nDisconnected(const QString& imei) {
-    GT06NConn* c = m_gt06nConns.value(imei, nullptr);
+
+
+
+void SimulatorWindow::gt06nDisconnected(const QString& connKey) {
+    const QString imei = connKey.section(':', 0, 0);
+    GT06NConn* c = m_gt06nConns.value(connKey, nullptr);
     if (!c) return;
     c->loggedIn   = false;
     c->connecting = false;
@@ -1032,8 +1544,9 @@ void SimulatorWindow::gt06nDisconnected(const QString& imei) {
         .arg(imei.right(6)), "#F97316");
 }
 
-void SimulatorWindow::gt06nSocketError(const QString& imei, QAbstractSocket::SocketError err) {
-    GT06NConn* c = m_gt06nConns.value(imei, nullptr);
+void SimulatorWindow::gt06nSocketError(const QString& connKey, QAbstractSocket::SocketError err) {
+    const QString imei = connKey.section(':', 0, 0);
+    GT06NConn* c = m_gt06nConns.value(connKey, nullptr);
     if (!c) return;
     QString msg = c->socket ? c->socket->errorString() : "unknown";
     c->loggedIn   = false;
@@ -1087,7 +1600,20 @@ void SimulatorWindow::updateTable() {
 
         QString nameImei=v.name+"\n"+v.imei;
         QString stCol=v.immobilised?"#EF4444":v.status=="alarm"?"#DC2626":v.status=="online"?"#10B981":"#D97706";
-        QString stTxt=v.immobilised?"✂️ CUT":v.engineOn?(v.status=="alarm"?"⚠ ALARM":v.status.toUpper()):"🔴 OFF";
+        // Show CSV progress in status column
+        QString stTxt;
+        if (v.immobilised) {
+            stTxt = "✂️ CUT";
+        } else if (v.csvIdx >= 0 && !v.csvTrack.isEmpty()) {
+            int pct = v.csvTrack.size() > 0 ? (v.csvIdx * 100 / v.csvTrack.size()) : 0;
+            stTxt = QString("📡 CSV %1/%2 (%3%)")
+                    .arg(qMin(v.csvIdx, v.csvTrack.size()))
+                    .arg(v.csvTrack.size()).arg(pct);
+        } else if (v.engineOn) {
+            stTxt = v.status == "alarm" ? "⚠ ALARM" : v.status.toUpper();
+        } else {
+            stTxt = "🔴 OFF";
+        }
         setItem(1,nameImei);
         setItem(2,v.protocol);
         setItem(3,stTxt,stCol);
@@ -1103,6 +1629,30 @@ void SimulatorWindow::updateTable() {
 
 void SimulatorWindow::onStatsTimer() {
     updateStats();
+
+    // Update CSV progress label — show pts for selected/first device with active CSV
+    if (!m_csvProgressLabel) return;
+    const VehicleState* active = nullptr;
+    // Prefer the selected row
+    if (m_selectedRow >= 0 && m_selectedRow < (int)m_vehicles.size() &&
+        m_vehicles[m_selectedRow].csvIdx >= 0)
+        active = &m_vehicles[m_selectedRow];
+    // Fall back to first vehicle with active CSV
+    if (!active) {
+        for (const auto& v : m_vehicles) {
+            if (v.csvIdx >= 0) { active = &v; break; }
+        }
+    }
+    if (active && !active->csvTrack.isEmpty()) {
+        int idx   = active->csvIdx;
+        int total = active->csvTrack.size();
+        int pct   = total > 0 ? (idx * 100 / total) : 0;
+        m_csvProgressLabel->setText(
+            QString("▶ %1/%2 pts (%3%)")
+            .arg(qMin(idx, total)).arg(total).arg(pct));
+    } else {
+        m_csvProgressLabel->setText("");
+    }
 }
 
 void SimulatorWindow::updateStats() {
@@ -1275,45 +1825,123 @@ void SimulatorWindow::onLoadCSV() {
 }
 
 void SimulatorWindow::onCsvAssignImei() {
-    if(m_csvTrack.isEmpty()){appendLog("⚠️ Load a CSV file first","#F59E0B");return;}
-    QString imei=m_csvImeiCombo->currentData().toString();
-    if(imei.isEmpty()){appendLog("⚠️ No vehicle selected","#F59E0B");return;}
-    auto it=std::find_if(m_vehicles.begin(),m_vehicles.end(),[&](const VehicleState& v){return v.imei==imei;});
-    if(it==m_vehicles.end()){appendLog("⚠️ Vehicle not found: "+imei,"#EF4444");return;}
-    applyCsvToVehicle(*it,m_csvTrack);
-    appendLog(QString("▶ CSV assigned to %1 [%2] (%3 pts)").arg(it->name).arg(imei).arg(m_csvTrack.size()),"#10B981");
-    if(!m_running) onStartAll();
+    if (m_csvTrack.isEmpty()) { appendLog("⚠️ Load a CSV file first","#F59E0B"); return; }
+    QString imei = m_csvImeiCombo ? m_csvImeiCombo->currentData().toString() : "";
+    if (imei.isEmpty()) { appendLog("⚠️ Select a device first","#F59E0B"); return; }
+    auto it = std::find_if(m_vehicles.begin(), m_vehicles.end(),
+                           [&](const VehicleState& v){ return v.imei == imei; });
+    if (it == m_vehicles.end()) { appendLog("⚠️ Device not found: "+imei,"#EF4444"); return; }
+    applyCsvToVehicle(*it, m_csvTrack);
+    it->csvLoopOn = m_btnCsvLoop ? m_btnCsvLoop->isChecked() : true;
+    appendLog(QString("↗ CSV assigned to %1 [%2 pts, loop=%3]")
+        .arg(imei).arg(m_csvTrack.size()).arg(it->csvLoopOn?"ON":"OFF"), "#10B981");
+    if (!m_running) onStartAll();
 }
 
 QVector<CsvPoint> SimulatorWindow::parseCsvFile(const QString& path) {
+    // Accepts any CSV with column headers (case-insensitive).
+    // Required: lat/latitude, lon/lng/longitude
+    // Optional: speed, heading/course, altitude, ignition/acc, dt/time/timestamp, alarm/event
     QFile f(path); QVector<CsvPoint> pts;
     if(!f.open(QIODevice::ReadOnly)) return pts;
-    QTextStream ts(&f);
-    QString hdr=ts.readLine().trimmed().toLower();
-    QStringList h=hdr.split(',');
-    int iLat=h.indexOf("lat"),iLon=h.indexOf("lon");
-    if(iLon<0) iLon=h.indexOf("lng");
-    int iSpd=h.indexOf("speed"),iHdg=h.indexOf("heading"),iHdg2=h.indexOf("course"),iIgn=h.indexOf("ignition");
-    if(iLat<0||iLon<0) return pts;
-    while(!ts.atEnd()){
-        QString line=ts.readLine().trimmed(); if(line.isEmpty()) continue;
-        QStringList v=line.split(',');
-        if(v.size()<=qMax(iLat,iLon)) continue;
-        CsvPoint pt;
-        pt.lat=v[iLat].toDouble(); pt.lon=v[iLon].toDouble();
-        if(pt.lat==0&&pt.lon==0) continue;
-        pt.speed   = iSpd>=0&&iSpd<v.size()  ? v[iSpd].toDouble() : 0;
-        pt.heading = iHdg>=0&&iHdg<v.size()  ? v[iHdg].toDouble() : (iHdg2>=0&&iHdg2<v.size()?v[iHdg2].toDouble():0);
-        pt.ignition= iIgn>=0&&iIgn<v.size()  ? (v[iIgn]!="0"&&v[iIgn].toLower()!="false") : true;
-        pts.append(pt);
+    QTextStream ts(&f); ts.setEncoding(QStringConverter::Utf8);
+
+    // ── Parse header ─────────────────────────────────────────────
+    QString hdr = ts.readLine().trimmed().toLower();
+    // Handle Excel BOM
+    if(hdr.startsWith(QChar(0xFEFF))) hdr = hdr.mid(1);
+    QStringList h = hdr.split(',');
+    // Strip quotes
+    for(auto& col : h)
+          col = col.remove('"').remove("'").trimmed();
+
+    auto col = [&](const QStringList& names) -> int {
+        for(const QString& n : names) {
+            int idx = h.indexOf(n);
+            if(idx >= 0) return idx;
+        }
+        return -1;
+    };
+
+    int iLat = col({"lat","latitude"});
+    int iLon = col({"lon","lng","longitude"});
+    if(iLat<0||iLon<0) {
+        appendLog("CSV: no lat/lon columns found in: "+hdr.left(80),"#EF4444");
+        return pts;
     }
+    int iSpd  = col({"speed","spd","kph","kmh","velocity"});
+    int iHdg  = col({"heading","course","direction","hdg","bearing"});
+    int iAlt  = col({"altitude","alt","elevation","elev"});
+    int iIgn  = col({"ignition","ign","acc","engine","engineon","engine_on"});
+    int iDt   = col({"dt","datetime","time","timestamp","ts","date_time"});
+    int iAlrm = col({"alarm","alert","event","alarm1status"});
+
+    int count = 0;
+    while(!ts.atEnd()){
+        QString line = ts.readLine().trimmed();
+        if(line.isEmpty()) continue;
+        // Handle quoted CSV fields
+        QStringList v;
+        if(line.contains('"')) {
+            // Simple quoted-field parser
+            bool inQ = false; QString cur;
+            for(QChar c : line) {
+                if(c=='"') { inQ=!inQ; }
+                else if(c==',' && !inQ) { v.append(cur.trimmed()); cur.clear(); }
+                else cur+=c;
+            }
+            v.append(cur.trimmed());
+        } else {
+            v = line.split(',');
+        }
+        if(v.size() <= qMax(iLat,iLon)) continue;
+
+        CsvPoint pt;
+        pt.lat = v[iLat].trimmed().toDouble();
+        pt.lon = v[iLon].trimmed().toDouble();
+        if(qAbs(pt.lat)<0.0001 && qAbs(pt.lon)<0.0001) continue;
+
+        pt.speed    = (iSpd>=0 && iSpd<v.size())  ? v[iSpd].trimmed().toDouble() : 0.0;
+        pt.heading  = (iHdg>=0 && iHdg<v.size())  ? v[iHdg].trimmed().toDouble() : 0.0;
+        pt.altitude = (iAlt>=0 && iAlt<v.size())  ? v[iAlt].trimmed().toDouble() : 0.0;
+        if(iIgn>=0 && iIgn<v.size()) {
+            QString ig = v[iIgn].trimmed().toLower();
+            pt.ignition = (ig!="0" && ig!="false" && ig!="off" && ig!="no");
+        } else {
+            pt.ignition = true;
+        }
+        if(iAlrm>=0 && iAlrm<v.size()) {
+            QString al = v[iAlrm].trimmed().toLower();
+            if(al!="0"&&al!="false"&&al!="none"&&!al.isEmpty()) pt.alarm = al;
+        }
+        // Epoch timestamp (optional — used for replay timing)
+        if(iDt>=0 && iDt<v.size()) {
+            QString dts = v[iDt].trimmed();
+            QDateTime dt = QDateTime::fromString(dts, Qt::ISODate);
+            if(!dt.isValid()) dt = QDateTime::fromString(dts, "yyyy-MM-dd HH:mm:ss");
+            if(!dt.isValid()) dt = QDateTime::fromString(dts, "dd/MM/yyyy HH:mm:ss");
+            if(dt.isValid()) pt.msEpoch = dt.toMSecsSinceEpoch();
+        }
+        pts.append(pt);
+        count++;
+    }
+    appendLog(QString("CSV loaded: %1 points  [lat@%2, lon@%3, spd@%4, hdg@%5, ign@%6]")
+        .arg(count).arg(iLat).arg(iLon).arg(iSpd).arg(iHdg).arg(iIgn), "#7C3AED");
     return pts;
 }
 
 void SimulatorWindow::applyCsvToVehicle(VehicleState& v, const QVector<CsvPoint>& track) {
-    v.csvTrack=track; v.csvIdx=0; v.csvLoop=true;
-    if(!track.isEmpty()){v.lat=track[0].lat;v.lon=track[0].lon;v.speed=track[0].speed;v.heading=track[0].heading;}
-    v.status="online";
+    v.csvTrack = track;
+    v.csvIdx   = 0;
+    // csvLoopOn is set by the caller (loop button state)
+    if (!track.isEmpty()) {
+        v.lat     = track[0].lat;
+        v.lon     = track[0].lon;
+        v.speed   = track[0].speed;
+        v.heading = track[0].heading;
+    }
+    v.engineOn = true;   // ensure vehicle is active
+    v.status   = "online";
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1474,6 +2102,8 @@ void SimulatorWindow::doFetchDevices(const QString& base, const QString& jwt) {
             VehicleState v;
             v.id=(int)m_vehicles.size()+1; v.imei=imei;
             v.name=o["name"].toString(imei); v.protocol="GT06N";
+            v.gps_proto=0x22;
+            v.gps_port=6023;
             v.lat=12.5+QRandomGenerator::global()->generateDouble()*2;
             v.lon=77.0+QRandomGenerator::global()->generateDouble()*2;
             v.targetLat=v.lat; v.targetLon=v.lon;
